@@ -242,6 +242,16 @@ svg.i { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-widt
 .wv > *, .card, .prompt { min-width: 0; }
 .seghead { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--mute); font-variant-numeric: tabular-nums; }
 .seghead #segno { white-space: nowrap; }
+.segnav { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: var(--acc); border: 1px solid var(--line2); flex: none; }
+.segnav svg.i, .cnav svg.i { width: 18px; height: 18px; stroke-width: 2.4; }
+.segnav.fwd svg.i, .cnav.fwd svg.i { transform: scaleX(-1); }
+.segnav:active, .cnav:active { background: var(--acc-soft); }
+.padnav { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
+.padnav .padlabel { flex: 1; min-width: 0; }
+.cnav { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: var(--acc); border: 1.5px solid var(--line2); flex: none; }
+.stkrow { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; min-height: 28px; }
+.repbtn { padding: 4px 12px; border-radius: 12px; border: 1px solid var(--line2); color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+.repbtn:active { background: var(--card2); }
 .seghead #segno:empty { display: none; }
 .seghead .bar { height: 4px; }
 .seghead .bar i { transition: width .25s; }
@@ -350,6 +360,14 @@ button.slot:active { background: var(--card2); }
 .tkey .ti { width: 40px; height: 26px; fill: none; stroke: currentColor; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
 .tkey span { font-size: 12px; color: var(--mute); }
 .tkey:active { background: var(--card2); }
+.tkey.ok { border-color: var(--good); background: rgba(69, 196, 109, .16); }
+.tkey.bad { border-color: var(--bad); background: rgba(242, 85, 79, .16); }
+.tonepick { width: 100%; }
+.tp-q { font-size: 19px; }
+.tkeys.sm { margin-top: 0; gap: 8px; }
+.tkeys.sm .tkey { height: 58px; border-radius: 14px; }
+.svcount .rp.sm { width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--acc); color: var(--acc); display: inline-grid; place-items: center; vertical-align: middle; margin-right: 4px; }
+.svcount .rp.sm svg.i { width: 15px; height: 15px; }
 
 /* ---------- sheets ---------- */
 .sheet-bg {
@@ -425,7 +443,7 @@ button.slot:active { background: var(--card2); }
   .prompt { padding: 12px 10px 12px; border-radius: 18px; }
   .abtn { height: 38px; padding: 0 12px; font-size: 13.5px; }
   .chip { padding: 5px 10px; font-size: 13px; }
-  .pad { width: max(260px, min(100%, calc(100svh - 362px))); border-radius: 16px; }
+  .pad { width: max(260px, min(100%, calc(100svh - 378px))); border-radius: 16px; }
   .padlabel { font-size: 19px; }
   .tbtn { height: 40px; padding: 0 12px; font-size: 13.5px; }
   .modes a { font-size: 11.5px; }

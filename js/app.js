@@ -8,6 +8,7 @@
   const STROKES = window.HZ_STROKES || (window.HZ_STROKES = {});
   const CHARS = window.HZ_CHARS || {};
   const AUDIO = window.HZ_AUDIO || {};
+  const SYL = window.HZ_SYL || {};
   const app = document.getElementById('app');
   const sheetRoot = document.getElementById('sheets');
 
@@ -53,6 +54,7 @@
     showRu: true, showEn: true, ruby: false,
     hintAfter: 3, leniency: 1, autoplay: true, slowRate: 0.7,
     prompt: 'pinyin', paper: false, toneSyl: false, showTr: false,
+    strokeStyle: 'pen', reps: 3, dictTones: true,
   };
   const DB = (() => {
     try {
@@ -115,6 +117,11 @@
       tip: 'На iPad: Safari → «Поделиться» → «На экран Домой» — откроется во весь экран. Пишите пальцем или Apple Pencil.',
       saved: 'Сохранено', done: 'Готово', star: 'доп. лексика', writeIt: 'Написать', back: 'Назад',
       outlineOn: 'Контур', score: 'Результат',
+      rep: 'повтор', skipped: 'пропущено',
+      toneQ: (c) => `Тон для «${c}»?`, toneScore: (a, b) => `тоны: ${a} из ${b}`, sylListen: 'Слушать слог', repsBtn: (n) => `Повтор ×${n || '∞'}`,
+      prevChar: 'Предыдущий иероглиф', nextChar: 'Следующий иероглиф', prevSeg: 'Предыдущая фраза', nextSeg: 'Следующая фраза',
+      strokeStyle: 'Вид черт', strokeStyleV: ['Перо — ровная линия', 'Кисть — каллиграфия'],
+      repsSet: 'Пропись: сколько раз писать каждый иероглиф',
       pos: { n: 'сущ.', v: 'гл.', adj: 'прил.', adv: 'нареч.', pron: 'мест.', part: 'част.', conj: 'союз', prep: 'предлог', interj: 'межд.', name: 'имя собств.', phr: 'выраж.' },
     },
     en: {
@@ -154,6 +161,11 @@
       tip: 'On iPad: Safari → Share → Add to Home Screen opens it full-screen. Write with a finger or Apple Pencil.',
       saved: 'Saved', done: 'Done', star: 'extra vocabulary', writeIt: 'Write', back: 'Back',
       outlineOn: 'Outline', score: 'Score',
+      rep: 'rep', skipped: 'skipped',
+      toneQ: (c) => `Tone of “${c}”?`, toneScore: (a, b) => `tones: ${a} of ${b}`, sylListen: 'Listen to the syllable', repsBtn: (n) => `Repeat ×${n || '∞'}`,
+      prevChar: 'Previous character', nextChar: 'Next character', prevSeg: 'Previous phrase', nextSeg: 'Next phrase',
+      strokeStyle: 'Stroke style', strokeStyleV: ['Pen — even line', 'Brush — calligraphy'],
+      repsSet: 'Trace: times to write each character',
       pos: { n: 'n.', v: 'v.', adj: 'adj.', adv: 'adv.', pron: 'pron.', part: 'part.', conj: 'conj.', prep: 'prep.', interj: 'interj.', name: 'proper n.', phr: 'phr.' },
     },
   };
@@ -217,20 +229,35 @@
     if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); setTimeout(() => speechSynthesis.speak(u), 80); }
     else speechSynthesis.speak(u);
   }
+  function playSrc(src, rate, onFail) {
+    stopAudio();
+    player.onerror = onFail ? () => { player.onerror = null; onFail(); } : null;
+    player.src = src;
+    player.defaultPlaybackRate = rate; player.playbackRate = rate;
+    try { player.preservesPitch = true; player.webkitPreservesPitch = true; } catch (e) { /* ignore */ }
+    const p = player.play();
+    if (p) p.catch((err) => { if (err && err.name !== 'AbortError' && onFail) { player.onerror = null; onFail(); } });
+  }
   function say(text, slow) {
     if (!text) return;
-    stopAudio();
     const rate = slow ? S().slowRate : 1;
     const src = AUDIO[text];
-    if (src) {
-      player.src = src;
-      player.defaultPlaybackRate = rate; player.playbackRate = rate;
-      try { player.preservesPitch = true; player.webkitPreservesPitch = true; } catch (e) { /* ignore */ }
-      const p = player.play();
-      if (p) p.catch((err) => { if (err && err.name !== 'AbortError') speakTTS(text, rate); });
-      return;
-    }
+    if (src) { playSrc(src, rate, () => speakTTS(text, rate)); return; }
+    stopAudio();
     speakTTS(text, rate);
+  }
+  // One syllable in its exact tone (recordings from davinfifield/mp3-chinese-pinyin-sound, public domain).
+  // Neutral tones have few recordings and only make sense inside the word, so those play the word.
+  function sylKey(syl, tone) {
+    const b = T.bare(syl).toLowerCase().replace(/ü/g, 'uu').replace(/[^a-z]/g, '');
+    return b ? b + tone : null;
+  }
+  function saySyl(syl, tone, word) {
+    const k = syl && syl !== 'r' ? sylKey(syl, tone) : null;
+    if (!k) { say(word); return; }
+    if (SYL[k]) { playSrc(SYL[k], 1, () => say(word)); return; }
+    if (tone === 5 || navigator.onLine === false) { say(word); return; }
+    playSrc(`https://cdn.jsdelivr.net/gh/davinfifield/mp3-chinese-pinyin-sound@master/mp3/${k}.mp3`, 1, () => say(word));
   }
 
   /* ------------------------------------------------------------------ stats */
@@ -380,8 +407,8 @@
       }
       if (pc.gap !== 'none') html += ' ';
       const hi = o.hi && o.hi.ti === pc.ti && o.hi.si === pc.si ? ' hi' : '';
-      const tone = pc.text.toLowerCase() === 'r' && pc.si > 0 ? item.tokens[pc.ti].tones[pc.si - 1] : pc.tone;
-      html += `<span class="t${tone}${hi}">${esc(pc.text)}</span>`;
+      const tone = o.bare ? 5 : (pc.text.toLowerCase() === 'r' && pc.si > 0 ? item.tokens[pc.ti].tones[pc.si - 1] : pc.tone);
+      html += `<span class="t${tone}${hi}">${esc(o.bare ? T.bare(pc.text) : pc.text)}</span>`;
     }
     return html.trim();
   }
@@ -409,6 +436,56 @@
     return pending[ch];
   }
 
+  /* ------------------------------------------------------------------ pen style
+   * Make Me a Hanzi outlines come from a brush (kaiti) font. For pen copybook practice we draw
+   * every stroke as an even-width line along its median, the same line the quiz matches against.
+   * Outline = segment quads + round joints, all wound one way so the nonzero fill is their union. */
+  const PEN_W = 54;
+  const penCache = {};
+  // Drop brush artefacts from a median for display: the entry kink (起笔) and a short finishing tick (顿笔).
+  // Real hooks (钩) turn back by more than ~75° and are kept. Matching still uses the original medians.
+  function cleanMedian(src) {
+    const m = src.slice();
+    if (m.length < 3) return m;
+    const len = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const ang = (a, b, c) => {
+      const v1 = [b[0] - a[0], b[1] - a[1]]; const v2 = [c[0] - b[0], c[1] - b[1]];
+      const d = (v1[0] * v2[0] + v1[1] * v2[1]) / ((Math.hypot(v1[0], v1[1]) * Math.hypot(v2[0], v2[1])) || 1);
+      return (Math.acos(Math.max(-1, Math.min(1, d))) * 180) / Math.PI;
+    };
+    const total = m.slice(1).reduce((acc, p, i) => acc + len(m[i], p), 0);
+    while (m.length >= 3 && len(m[0], m[1]) < Math.max(40, 0.14 * total) && ang(m[0], m[1], m[2]) > 35) m.shift();
+    const n = m.length;
+    if (n >= 3) {
+      const a = ang(m[n - 3], m[n - 2], m[n - 1]);
+      if (len(m[n - 2], m[n - 1]) < Math.max(36, 0.1 * total) && a > 25 && a < 75) m.pop();
+    }
+    return m;
+  }
+  function penPath(src) {
+    const m = cleanMedian(src);
+    const r = PEN_W / 2; const parts = [];
+    const area = (pts) => pts.reduce((a, p, i) => { const q = pts[(i + 1) % pts.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0);
+    const poly = (pts) => { const o = area(pts) < 0 ? pts.slice().reverse() : pts; return 'M' + o.map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L') + ' Z'; };
+    m.forEach(([x, y]) => {
+      const c = []; for (let k = 0; k < 18; k++) { const a = (2 * Math.PI * k) / 18; c.push([x + r * Math.cos(a), y + r * Math.sin(a)]); }
+      parts.push(poly(c));
+    });
+    for (let i = 0; i < m.length - 1; i++) {
+      const [x1, y1] = m[i]; const [x2, y2] = m[i + 1];
+      const L = Math.hypot(x2 - x1, y2 - y1) || 1; const nx = (-(y2 - y1) / L) * r; const ny = ((x2 - x1) / L) * r;
+      parts.push(poly([[x1 + nx, y1 + ny], [x2 + nx, y2 + ny], [x2 - nx, y2 - ny], [x1 - nx, y1 - ny]]));
+    }
+    return parts.join(' ');
+  }
+  function getDrawData(ch) {
+    return getStrokeData(ch).then((d) => {
+      if (S().strokeStyle === 'brush') return d;
+      if (!penCache[ch]) penCache[ch] = Object.assign({}, d, { strokes: d.medians.map(penPath) });
+      return penCache[ch];
+    });
+  }
+
   /* ------------------------------------------------------------------ stroke viewer (own SVG renderer) */
   let svUid = 0;
   class StrokeViewer {
@@ -416,7 +493,7 @@
       this.host = host; this.ch = ch; this.o = o; this.k = 0; this.n = 0;
       this.playing = false; this.once = false; this.anim = null; this.timer = null; this.dead = false;
       host.innerHTML = gridSVG() + '<div class="sverr"></div>';
-      getStrokeData(ch).then((d) => {
+      getDrawData(ch).then((d) => {
         if (this.dead) return;
         this.d = d; this.n = d.strokes.length; this.build();
         this.k = o.autoplay ? 0 : this.n;
@@ -523,7 +600,7 @@
         highlightColor: '#ef6158', highlightCompleteColor: '#45c46d', radicalColor: null,
         drawingWidth: Math.max(4, Math.round(size / 68)), strokeAnimationSpeed: 1.1, delayBetweenStrokes: 200,
         charDataLoader: (c, onLoad, onError) => {
-          getStrokeData(c).then(onLoad, (err) => { onError(err); this.fail(c); });
+          getDrawData(c).then(onLoad, (err) => { onError(err); this.fail(c); });
         },
       }));
     }
@@ -636,7 +713,7 @@
     if (info.decomposition && !/[？?]/.test(info.decomposition)) kv.push([t('parts'), `<span class="hz">${esc(info.decomposition)}</span>`]);
     if (info.etymology && info.etymology.hint) kv.push([t('etym'), esc(info.etymology.hint)]);
     host.innerHTML = `
-      <div class="svcount"><span>${readings.map((r) => sylHTML(r, T.toneOf(r))).join(', ')}</span> · <b class="cp-n"></b> <span class="cp-k"></span></div>
+      <div class="svcount"><button class="rp sm" data-sv="syl" aria-label="${esc(t('sylListen'))}">${I('vol')}</button> <span>${readings.map((r) => sylHTML(r, T.toneOf(r))).join(', ')}</span> · <b class="cp-n"></b> <span class="cp-k"></span></div>
       <div class="cp-stage"><div class="sv"></div></div>
       <div class="svbar cp-view">
         <button class="pill" data-sv="prev" aria-label="previous stroke">${I('prev')}</button>
@@ -688,6 +765,7 @@
       else if (a === 'next' && viewer) viewer.next();
       else if (a === 'play' && viewer) viewer.toggle();
       else if (a === 'write') showPad();
+      else if (a === 'syl') { const sy = o.syl || readings[0]; saySyl(sy, T.toneOf(sy), ch); }
       else if (a === 'view') showViewer();
       else if (a === 'restart' && pad) { if (pad.done) pad.start(ch); else pad.restart(); }
       else if (a === 'hint' && pad) pad.hint();
@@ -767,6 +845,8 @@
           <div><h4>${esc(t('uiLang'))}</h4>${seg('ui', [['ru', 'Русский'], ['en', 'English']])}</div>
           <div><h4>${esc(t('translations'))}</h4>${sw('showRu', 'Русский (RU)')}${sw('showEn', 'English (EN)')}</div>
           <div>${sw('ruby', t('ruby'))}${sw('autoplay', t('autoplay'))}</div>
+          <div><h4>${esc(t('strokeStyle'))}</h4>${seg('strokeStyle', [['pen', t('strokeStyleV')[0]], ['brush', t('strokeStyleV')[1]]])}</div>
+          <div><h4>${esc(t('repsSet'))}</h4>${seg('reps', [[1, '×1'], [3, '×3'], [5, '×5'], [0, '∞']])}</div>
           <div><h4>${esc(t('hintAfter'))}</h4>${seg('hintAfter', [[1, '1'], [2, '2'], [3, '3'], [5, '5'], [0, t('never')]])}</div>
           <div><h4>${esc(t('strict'))}</h4>${seg('leniency', [[0.75, t('strictV')[0]], [1, t('strictV')[1]], [1.35, t('strictV')[2]]])}</div>
           <div><h4>${esc(t('slowRate'))}</h4>${seg('slowRate', [[0.5, '0.5×'], [0.7, '0.7×'], [0.85, '0.85×']])}</div>
@@ -1094,6 +1174,7 @@
     return `<div class="chips" style="justify-content:center;margin-bottom:12px">
       <button class="chip ${!S().paper ? 'on' : ''}" data-act="paper" data-v="0">${I('tablet')} ${esc(t('onScreen'))}</button>
       <button class="chip ${S().paper ? 'on' : ''}" data-act="paper" data-v="1">${I('paper')} ${esc(t('onPaper'))}</button>
+      ${!S().paper ? `<button class="chip ${S().dictTones ? 'on' : ''}" data-act="dtones">${I('tone')} ${esc(t('tones'))}</button>` : ''}
       <span style="width:8px"></span>
       ${[['pinyin', 'pPinyin'], ['trans', 'pTrans'], ['audio', 'pAudio']].map(([v, k]) => `<button class="chip ${p === v ? 'on' : ''}" data-act="prompt" data-v="${v}">${esc(t(k))}</button>`).join('')}
     </div>`;
@@ -1101,6 +1182,7 @@
   function chipActs(a, el) {
     if (a === 'prompt') { S().prompt = el.dataset.v; save(); render(); return true; }
     if (a === 'paper') { S().paper = el.dataset.v === '1'; save(); render(); return true; }
+    if (a === 'dtones') { S().dictTones = !S().dictTones; save(); render(); return true; }
     return false;
   }
 
@@ -1119,6 +1201,9 @@
     const results = new Array(chars.length).fill(null);
     let lastSeg = -1;
     const prompt = dict ? set.prompt : 'pinyin';
+    const toneStep = dict && set.dictTones !== false;
+    const toneRes = new Array(chars.length).fill(null);
+    let awaiting = null; let toneBusy = false;
     if (!chars.length) { viewStudy(lesson, idx); return; }
 
     const trFixed = dict && prompt === 'trans';
@@ -1126,7 +1211,10 @@
       <div class="wv split">
         <section class="prompt">
           ${dict ? promptChips() : ''}
-          <div class="seghead"><span id="segno"></span><div class="bar"><i id="pbar"></i></div><span id="cno"></span></div>
+          <div class="seghead">
+            ${segs.length > 1 ? `<button class="segnav" data-act="segprev" aria-label="${esc(t('prevSeg'))}">${I('back')}</button><span id="segno"></span><button class="segnav fwd" data-act="segnext" aria-label="${esc(t('nextSeg'))}">${I('back')}</button>` : '<span id="segno"></span>'}
+            <div class="bar"><i id="pbar"></i></div><span id="cno"></span>
+          </div>
           <div class="segp" id="segp"></div>
           <div class="ans big" id="ans"></div>
           <div class="ptr" id="ptr"></div>
@@ -1138,14 +1226,21 @@
           </div>
         </section>
         <section class="padwrap" id="padzone">
-          <div class="padlabel" id="plabel"></div>
+          <div class="padnav">
+            <button class="cnav" data-act="cprev" aria-label="${esc(t('prevChar'))}">${I('back')}</button>
+            <div class="padlabel" id="plabel"></div>
+            <button class="cnav fwd" data-act="cnext" aria-label="${esc(t('nextChar'))}">${I('back')}</button>
+          </div>
           <div class="pad" id="pad"></div>
-          <div class="ptools">
+          <div class="tonepick" id="tonepick" hidden>
+            <div class="tkeys sm">${[1, 2, 3, 4, 5].map((n) => `<button class="tkey" data-act="dtone" data-v="${n}">${toneIcon(n)}<span>${n === 5 ? esc(t('neutral')) : n}</span></button>`).join('')}</div>
+          </div>
+          <div class="ptools" id="ptools">
             <button class="tbtn" data-act="hint">${I('bulb')} ${esc(t('hint'))}</button>
             <button class="tbtn" data-act="reveal">${I('eye')} ${esc(t('show'))}</button>
             <button class="tbtn" data-act="restart">${I('redo')} ${esc(t('again'))}</button>
           </div>
-          <div class="stk" id="stk"></div>
+          <div class="stkrow" id="stkrow"><span class="stk" id="stk"></span>${dict ? '' : `<button class="repbtn" data-act="reps" id="repbtn">${esc(t('repsBtn', set.reps))}</button>`}</div>
         </section>
         <section class="result" id="result" hidden></section>
       </div>`;
@@ -1167,8 +1262,8 @@
           const i = ci++; const r = results[i];
           const cls = ['slot'];
           let txt = esc(c);
-          if (r) cls.push(r.grade === 2 ? 'g' : r.grade === 1 ? 'f' : 'b');
-          else if (!finished && i === curIdx) { cls.push('cur'); if (dict) { cls.push('blank'); txt = ''; } }
+          if (!finished && i === curIdx) { cls.push('cur'); if (dict && !r) { cls.push('blank'); txt = ''; } }
+          else if (r) cls.push(r.grade === 2 ? 'g' : r.grade === 1 ? 'f' : 'b');
           else if (dict) { cls.push('blank'); txt = ''; }
           else cls.push('tr0');
           return finished ? `<span class="${cls.join(' ')}">${txt}</span>` : `<button class="${cls.join(' ')}" data-act="jump" data-i="${i}">${txt}</button>`;
@@ -1187,20 +1282,24 @@
       const doneN = results.filter(Boolean).length;
       cno.textContent = `${doneN}/${chars.length}`;
       pbar.style.width = `${Math.round(100 * doneN / chars.length)}%`;
-      segp.innerHTML = prompt === 'pinyin' ? pinyinHTML(item, { cap, hi: { ti: c.ti, si: c.ci }, range }) : '';
+      segp.innerHTML = prompt === 'pinyin' ? pinyinHTML(item, { cap, hi: { ti: c.ti, si: c.ci }, range, bare: toneStep }) : '';
       drawTr();
       ans.innerHTML = slotsHTML(cur, false, range);
       const pos = tk.chars.length > 1 ? ` <span class="sub">${tk.chars.filter((x) => T.isHan(x)).length > 1 ? `(${c.ci + 1}/${tk.chars.length})` : ''}</span>` : '';
-      const rp = `<button class="rp" data-act="seg" aria-label="${esc(t('listen'))}">${I('vol')}</button>`;
+      const rp = `<button class="rp" data-act="sylplay" aria-label="${esc(t('sylListen'))}">${I('vol')}</button>`;
       if (!dict) plabel.innerHTML = `${rp}${sylHTML(c.syl, c.tone)}<span class="sub">${esc(tk.h)} — ${glossLine(g)}</span>`;
-      else if (prompt === 'pinyin') plabel.innerHTML = `${rp}${sylHTML(c.syl, c.tone)}<span class="sub">${glossLine(g)}</span>${pos}`;
+      else if (prompt === 'pinyin') plabel.innerHTML = `${rp}${toneStep ? sylHTML(T.bare(c.syl), 5) : sylHTML(c.syl, c.tone)}<span class="sub">${glossLine(g)}</span>${pos}`;
       else if (prompt === 'trans') plabel.innerHTML = `${rp}<span class="sub">${glossLine(g)}</span>${pos}`;
       else plabel.innerHTML = `${rp}<span class="sub">${esc(t('charOf', cur + 1, chars.length))}</span>`;
       if (dict && set.autoplay && si !== lastSeg && seg) { say(seg.text); }
       lastSeg = si;
     }
+    let repDone = 0;
+    const repTarget = () => (dict ? 1 : set.reps);
     function progress(p) {
-      stk.textContent = p.total ? `${t('strokes', p.total)} · ${p.strokeNum}/${p.total}${p.mistakes ? ` · ✗ ${p.mistakes}` : ''}` : '';
+      const tgt = repTarget();
+      const repTxt = !dict && tgt !== 1 ? ` · ${t('rep')} ${repDone + 1}/${tgt || '∞'}` : '';
+      stk.textContent = p && p.total ? `${t('strokes', p.total)} · ${p.strokeNum}/${p.total}${p.mistakes ? ` · ✗ ${p.mistakes}` : ''}${repTxt}` : repTxt.replace(/^ · /, '');
     }
     const pad = new Pad($('pad'), {
       outline: !dict,
@@ -1211,20 +1310,62 @@
         const ci = queue[qpos];
         results[ci] = r;
         if (dict) recordChar(r.ch, r.grade);
-        qpos += 1;
-        if (qpos >= queue.length) finish();
-        else startCur();
+        if (toneStep && chars[ci].syl !== 'r') { askTone(ci); return; }
+        repDone += 1;
+        const tgt = repTarget();
+        if (!dict && !r.revealed && (tgt === 0 || repDone < tgt)) { update(); pad.start(chars[ci].ch); progress(pad); return; }
+        goTo(qpos + 1);
       },
     });
-    function startCur() { update(); pad.start(chars[queue[qpos]].ch); }
+    function startCur() { hideTone(); update(); pad.start(chars[queue[qpos]].ch); progress(null); }
+    function hideTone() { awaiting = null; toneBusy = false; $('tonepick').hidden = true; $('ptools').hidden = false; $('stkrow').hidden = false; }
+    function askTone(ci) {
+      awaiting = ci;
+      plabel.innerHTML = `<span class="tp-q">${esc(t('toneQ', chars[ci].ch))}</span>`;
+      $('tonepick').querySelectorAll('.tkey').forEach((b) => b.classList.remove('ok', 'bad'));
+      $('ptools').hidden = true; $('stkrow').hidden = true; $('tonepick').hidden = false;
+      const r = $('tonepick').getBoundingClientRect();
+      if (r.bottom > innerHeight) window.scrollBy({ top: r.bottom - innerHeight + 8, behavior: 'smooth' });
+    }
+    function answerTone(n, btn) {
+      if (awaiting == null || toneBusy) return;
+      const ci = awaiting; const c = chars[ci];
+      const base = c.ch === '一' ? 1 : c.ch === '不' ? 4 : null;
+      const ok = n === c.tone || (base != null && n === base);
+      toneRes[ci] = ok;
+      toneBusy = true;
+      if (btn) btn.classList.add(ok ? 'ok' : 'bad');
+      if (!ok) { const right = $('tonepick').querySelector(`.tkey[data-v="${c.tone}"]`); if (right) right.classList.add('ok'); }
+      plabel.innerHTML = `<span class="tp-q"><span class="hz">${esc(c.ch)}</span> ${sylHTML(c.syl, c.tone)} ${ok ? '<b style="color:var(--good)">✓</b>' : '<b style="color:var(--bad)">✗</b>'}</span>`;
+      saySyl(c.syl, c.tone, item.tokens[c.ti].h);
+      setTimeout(() => { if (!app.contains(segp) || awaiting !== ci) return; hideTone(); goTo(qpos + 1); }, ok ? 750 : 1500);
+    }
+    function goTo(k) {
+      repDone = 0;
+      if (k >= queue.length) { finish(); return; }
+      qpos = Math.max(0, k);
+      startCur();
+    }
+    function goSeg(delta) {
+      const c = chars[queue[qpos]]; if (!c) return;
+      const target = segIdx(c.ti) + delta;
+      if (target < 0 || target >= segs.length) return;
+      const k = queue.findIndex((i) => segIdx(chars[i].ti) === target);
+      if (k >= 0) goTo(k);
+    }
 
     function finish() {
       const n = chars.length;
       const g = results.filter((r) => r && r.grade === 2).length;
       const f = results.filter((r) => r && r.grade === 1).length;
-      const b = n - g - f;
+      const sk = results.filter((r) => !r).length;
+      const b = n - g - f - sk;
       const score = n ? Math.round(100 * (g + 0.5 * f) / n) : 0;
-      recordItem(item.id, mode, score); invalidate();
+      recordItem(item.id, mode, score);
+      const tAsked = toneRes.filter((x) => x !== null).length;
+      const tOk = toneRes.filter((x) => x === true).length;
+      if (toneStep && tAsked) recordItem(item.id, 'tones', Math.round((100 * tOk) / tAsked));
+      invalidate();
       $('padzone').hidden = true;
       plabel.innerHTML = ''; segp.innerHTML = pinyinHTML(item, { cap });
       segno.textContent = ''; cno.textContent = `${n}/${n}`; pbar.style.width = '100%';
@@ -1236,7 +1377,8 @@
       res.hidden = false;
       res.innerHTML = `
         <div class="score ${scoreCls(score)}">${score}%</div>
-        <div class="rstats"><span><b style="color:var(--good)">${g}</b> ${esc(t('clean'))}</span><span><b style="color:var(--fair)">${f}</b> ${esc(t('withErr'))}</span><span><b style="color:var(--bad)">${b}</b> ${esc(t('withHint'))}</span></div>
+        <div class="rstats"><span><b style="color:var(--good)">${g}</b> ${esc(t('clean'))}</span><span><b style="color:var(--fair)">${f}</b> ${esc(t('withErr'))}</span><span><b style="color:var(--bad)">${b}</b> ${esc(t('withHint'))}</span>${sk ? `<span><b>${sk}</b> ${esc(t('skipped'))}</span>` : ''}</div>
+        ${toneStep && tAsked ? `<div class="rstats" style="margin-top:6px"><span>${I('tone')} <b style="color:${tOk === tAsked ? 'var(--good)' : 'var(--fair)'}">${esc(t('toneScore', tOk, tAsked))}</b></span></div>` : ''}
         ${wrong.length ? `<div class="chargrid" style="margin-top:16px;grid-template-columns:repeat(auto-fill,minmax(50px,1fr))">${Array.from(new Set(wrong.map((w) => w.c.ch))).map((ch) => `<button class="tile hz m${level(ch)}" data-act="char" data-ch="${esc(ch)}">${esc(ch)}</button>`).join('')}</div>` : ''}
         <div class="rbtns">
           ${wrong.length ? `<button class="pbtn" data-act="retry">${I('redo')} ${esc(t('retryMistakes'))}</button>` : ''}
@@ -1246,8 +1388,8 @@
       res.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
     function restartWith(list) {
-      list.forEach((i) => { results[i] = null; });
-      queue = list; qpos = 0; lastSeg = -1;
+      list.forEach((i) => { results[i] = null; toneRes[i] = null; });
+      queue = list; qpos = 0; lastSeg = -1; repDone = 0;
       $('result').hidden = true; $('padzone').hidden = false; ans.classList.add('big');
       startCur();
     }
@@ -1269,8 +1411,18 @@
         if (chipActs(a, el)) return;
         const c = chars[queue[qpos]];
         if (a === 'seg' || a === 'segslow') { const s = c ? segs[segIdx(c.ti)] : segs[0]; if (s) say(s.text, a === 'segslow'); }
+        else if (a === 'sylplay') { if (c) saySyl(c.syl, c.tone, item.tokens[c.ti].h); }
+        else if (a === 'dtone') answerTone(+el.dataset.v, el);
         else if (a === 'say') say(full);
         else if (a === 'trtoggle') { set.showTr = !set.showTr; save(); el.classList.toggle('on', set.showTr); drawTr(); }
+        else if (a === 'cprev') { if (qpos > 0) { results[queue[qpos - 1]] = null; goTo(qpos - 1); } else { repDone = 0; startCur(); } }
+        else if (a === 'cnext') goTo(qpos + 1);
+        else if (a === 'segprev') goSeg(-1);
+        else if (a === 'segnext') goSeg(1);
+        else if (a === 'reps') {
+          const order = [1, 3, 5, 0]; set.reps = order[(order.indexOf(set.reps) + 1) % order.length]; save();
+          el.textContent = t('repsBtn', set.reps); progress(pad);
+        }
         else if (a === 'hint') pad.hint();
         else if (a === 'reveal') pad.reveal();
         else if (a === 'restart') pad.restart();
@@ -1281,11 +1433,17 @@
           if (i === queue[qpos]) return;
           const rest = queue.slice(qpos).filter((x) => x !== i);
           results[i] = null;
-          queue = [i].concat(rest); qpos = 0;
+          queue = [i].concat(rest); qpos = 0; repDone = 0;
           startCur();
         }
       },
-      key(e) { navKeys(lesson, idx, mode, e); },
+      key(e) {
+        if (awaiting != null) {
+          const m = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 0: 5 }[e.key];
+          if (m) { e.preventDefault(); answerTone(m, $('tonepick').querySelector(`.tkey[data-v="${m}"]`)); return; }
+        }
+        navKeys(lesson, idx, mode, e);
+      },
     });
   }
 

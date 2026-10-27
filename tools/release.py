@@ -13,14 +13,14 @@ import re
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ASSETS = [
     'css/app.css', 'js/text.js', 'js/app.js',
-    'data/lessons.js', 'data/strokes.js', 'data/chars.js', 'data/audio.js',
+    'data/lessons.js', 'data/strokes.js', 'data/chars.js', 'data/audio.js', 'data/syl.js',
     'vendor/hanzi-writer.min.js', 'vendor/pinyin-pro.js',
 ]
 STATIC = ['manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png']
 
 
 def main():
-    audio = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / 'audio').glob('*.mp3'))
+    audio = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / 'audio').rglob('*.mp3'))
     h = hashlib.sha1()
     for rel in ASSETS + STATIC + audio + ['tools/release.py']:
         h.update(rel.encode())
