@@ -22,7 +22,7 @@ STATIC = ['manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'i
 def main():
     audio = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / 'audio').glob('*.mp3'))
     h = hashlib.sha1()
-    for rel in ASSETS + STATIC + audio:
+    for rel in ASSETS + STATIC + audio + ['tools/release.py']:
         h.update(rel.encode())
         h.update((ROOT / rel).read_bytes())
     ver = h.hexdigest()[:10]
