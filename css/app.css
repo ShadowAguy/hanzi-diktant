@@ -52,7 +52,7 @@ svg.i { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-widt
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
   padding: calc(8px + var(--safe-t)) 0 8px;
   margin: 0 -16px; padding-left: 8px; padding-right: 8px;
-  background: rgba(20, 20, 22, .92);
+  background: rgba(20, 20, 22, .985);
   -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
 }
 .top-l, .top-r { display: flex; gap: 2px; align-items: center; }
@@ -151,7 +151,7 @@ svg.i { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-widt
 }
 .irow .num { font-size: 15px; color: var(--dim); font-variant-numeric: tabular-nums; padding-top: 4px; text-align: right; }
 .irow .num .star { color: var(--acc); }
-.irow .ih { font: 21px/1.5 var(--hz); word-break: break-all; }
+.irow .ih { font: 21px/1.5 var(--hz); display: flex; flex-wrap: wrap; }
 .irow .ip { color: var(--mute); font-size: 14px; margin-top: 2px; }
 .irow .it { color: var(--dim); font-size: 13.5px; margin-top: 4px; }
 .badges { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
@@ -163,7 +163,7 @@ svg.i { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-widt
 .card { background: var(--bg2); border-radius: 22px; padding: 22px 18px 20px; text-align: center; }
 .meta { font-size: 12px; color: var(--mute); letter-spacing: .4px; text-transform: uppercase; margin-bottom: 8px; }
 .meta .star { color: var(--acc); }
-.hline { font-family: var(--hz); line-height: 1.55; }
+.hline { font-family: var(--hz); line-height: 1.55; display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; }
 .hline .grp { white-space: nowrap; }
 .hline .w { display: inline; border-radius: 8px; padding: 0 1px; }
 .hline button.w:active, .hline button.w.sel { background: var(--acc-soft); }
@@ -238,7 +238,13 @@ svg.i { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-widt
 .sverr { position: absolute; inset: 0; display: grid; place-items: center; color: var(--mute); font-size: 14px; text-align: center; padding: 20px; }
 
 /* ---------- write / dictation ---------- */
-.wv { display: grid; gap: 12px; }
+.wv { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+.wv > *, .card, .prompt { min-width: 0; }
+.seghead { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--mute); font-variant-numeric: tabular-nums; }
+.seghead #segno { white-space: nowrap; }
+.seghead #segno:empty { display: none; }
+.seghead .bar { height: 4px; }
+.seghead .bar i { transition: width .25s; }
 .prompt { background: var(--bg2); border-radius: 20px; padding: 14px 14px 12px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .chip {
@@ -247,7 +253,9 @@ svg.i { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-widt
 }
 .chip.on { border-color: var(--acc); color: var(--text); background: var(--acc-soft); }
 .chip svg.i { width: 16px; height: 16px; }
-.abar { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.abar { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+.abtn.ghost { border-color: var(--line2); color: var(--mute); font-weight: 500; }
+.abtn.ghost.on { border-color: var(--acc); color: var(--text); background: var(--acc-soft); }
 .abtns { display: flex; gap: 8px; }
 .abtn {
   height: 40px; padding: 0 14px; border-radius: 20px; border: 2px solid var(--acc); color: var(--acc);
@@ -255,12 +263,15 @@ svg.i { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-widt
 }
 .abtn svg.i { width: 20px; height: 20px; }
 .abtn:active { background: var(--acc-soft); }
-.segp { margin-top: 12px; font-size: clamp(18px, 3.2vw, 23px); line-height: 1.5; text-align: center; }
+.segp { margin-top: 10px; font-size: clamp(19px, 3.2vw, 23px); line-height: 1.5; text-align: center; }
+.segp:empty { display: none; }
 .segp .muted { color: var(--dim); font-size: 13px; display: block; margin-bottom: 2px; letter-spacing: .3px; }
-.ptr { margin-top: 10px; font-size: 15px; color: #d6d6dc; text-align: center; }
+.ptr { margin-top: 10px; font-size: 15px; color: #d6d6dc; text-align: left; }
+.ptr:empty { display: none; }
 .ptr p { margin: 4px 0; }
 
-.ans { font-family: var(--hz); font-size: clamp(21px, 3.8vw, 27px); line-height: 1.7; text-align: center; margin-top: 12px; }
+.ans { font-family: var(--hz); font-size: clamp(21px, 3.8vw, 27px); line-height: 1.7; margin-top: 12px; display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; }
+.ans.big { font-size: clamp(30px, 8.5vw, 42px); line-height: 1.45; margin-top: 6px; }
 .ans .grp { white-space: nowrap; }
 .slot {
   display: inline-block; min-width: 1.05em; text-align: center; border-radius: 6px; position: relative;
@@ -317,7 +328,7 @@ button.slot:active { background: var(--card2); }
 .rhint { margin-top: 14px; font-size: 13px; color: var(--mute); }
 
 /* ---------- tones ---------- */
-.tline { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 2px; margin: 8px 0 4px; }
+.tline { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 2px; margin: 10px 0 4px; }
 .tcell { display: inline-flex; flex-direction: column; align-items: center; min-width: 46px; padding: 4px 2px; border-radius: 10px; }
 .tcell .tm { height: 26px; font-size: 18px; font-weight: 600; line-height: 26px; }
 .tcell .tc { font: 34px/1.15 var(--hz); }
@@ -336,6 +347,7 @@ button.slot:active { background: var(--card2); }
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
 }
 .tkey b { font-size: 30px; line-height: 1; font-weight: 600; }
+.tkey .ti { width: 40px; height: 26px; fill: none; stroke: currentColor; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
 .tkey span { font-size: 12px; color: var(--mute); }
 .tkey:active { background: var(--card2); }
 
@@ -403,13 +415,25 @@ button.slot:active { background: var(--card2); }
 
 @media (min-width: 980px) and (min-aspect-ratio: 4/3) {
   .wv.split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .wv.split .result { grid-column: 2; grid-row: 1; }
   .wv.split .prompt { position: sticky; top: 76px; }
   .pad { width: min(100%, 520px, 66vh); }
 }
 @media (max-width: 520px) {
+  .app { padding-left: 12px; padding-right: 12px; }
+  .top { margin: 0 -12px; }
+  .prompt { padding: 12px 10px 12px; border-radius: 18px; }
+  .abtn { height: 38px; padding: 0 12px; font-size: 13.5px; }
+  .chip { padding: 5px 10px; font-size: 13px; }
+  .pad { width: max(260px, min(100%, calc(100svh - 362px))); border-radius: 16px; }
+  .padlabel { font-size: 19px; }
+  .tbtn { height: 40px; padding: 0 12px; font-size: 13.5px; }
   .modes a { font-size: 11.5px; }
   .tabs a span { display: none; }
   .tabs a.on span { display: inline; }
   .cbtn { width: 60px; height: 60px; }
   .tkey { height: 64px; }
+  .tcell { min-width: 40px; }
+  .tcell .tc { font-size: 30px; }
+  .tkeys { gap: 8px; }
 }

@@ -52,7 +52,7 @@
     ui: /^ru\b/i.test(navigator.language || '') ? 'ru' : 'en',
     showRu: true, showEn: true, ruby: false,
     hintAfter: 3, leniency: 1, autoplay: true, slowRate: 0.7,
-    prompt: 'pinyin', paper: false, toneSyl: false,
+    prompt: 'pinyin', paper: false, toneSyl: false, showTr: false,
   };
   const DB = (() => {
     try {
@@ -364,7 +364,7 @@
       }).join('');
       const sel = o.sel === ti ? ' sel' : '';
       return o.clickable ? `<button class="w${sel}" data-act="word" data-ti="${ti}">${inner}</button>` : `<span class="w">${inner}</span>`;
-    }).join('') + '</span>').join('');
+    }).join('') + '</span>').join('<wbr>');
   }
 
   function pinyinHTML(item, o = {}) {
@@ -430,8 +430,9 @@
       const clips = d.strokes.map((p, i) => `<clipPath id="${id}c${i}"><path d="${p}"/></clipPath>`).join('');
       const bg = d.strokes.map((p) => `<path class="sv-bg" d="${p}"/>`).join('');
       const fg = d.strokes.map((p) => `<path class="sv-fg" d="${p}"/>`).join('');
-      const an = d.medians.map((m, i) => `<path class="sv-an" clip-path="url(#${id}c${i})" d="M${m.map((p) => p.join(' ')).join(' L')}" style="stroke-dasharray:${this.lens[i]} ${this.lens[i]};stroke-dashoffset:${this.lens[i]}"/>`).join('');
-      this.host.innerHTML = gridSVG() + `<svg class="sv-svg" viewBox="0 0 1024 1024" aria-label="${esc(this.ch)}"><defs>${clips}</defs><g transform="translate(0,900) scale(1,-1)">${bg}${fg}${an}</g></svg>`;
+      // clip on a wrapping <g> (WebKit drops clip-path on the animated element itself)
+      const an = d.medians.map((m, i) => `<g clip-path="url(#${id}c${i})"><path class="sv-an" d="M${m.map((p) => p.join(' ')).join(' L')}" stroke-dasharray="${this.lens[i]} ${this.lens[i]}" stroke-dashoffset="${this.lens[i]}"/></g>`).join('');
+      this.host.innerHTML = gridSVG() + `<svg class="sv-svg" viewBox="0 0 1024 1024" aria-label="${esc(this.ch)}"><g transform="translate(0,900) scale(1,-1)"><defs>${clips}</defs>${bg}${fg}${an}</g></svg>`;
       this.fg = Array.from(this.host.querySelectorAll('.sv-fg'));
       this.an = Array.from(this.host.querySelectorAll('.sv-an'));
     }
@@ -465,20 +466,27 @@
         return;
       }
       const i = this.k; const el = this.an[i]; const len = this.lens[i];
+      const dur = 260 + len * 0.7;
+      const ease = (x) => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
+      el.setAttribute('stroke-dashoffset', len);
       el.style.visibility = 'visible';
-      const a = el.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }], { duration: 260 + len * 0.7, easing: 'cubic-bezier(.4,0,.35,1)', fill: 'forwards' });
-      this.anim = a;
-      a.onfinish = () => {
-        if (this.anim !== a) return;
-        this.anim = null; el.style.visibility = 'hidden'; a.cancel();
+      const token = {}; this.anim = token;
+      const t0 = performance.now();
+      const frame = (now) => {
+        if (this.anim !== token) return;
+        const x = Math.min(1, (now - t0) / dur);
+        el.setAttribute('stroke-dashoffset', (len * (1 - ease(x))).toFixed(1));
+        if (x < 1) { token.raf = requestAnimationFrame(frame); return; }
+        this.anim = null; el.style.visibility = 'hidden'; el.setAttribute('stroke-dashoffset', len);
         this.k = i + 1;
         if (this.once) { this.playing = false; this.once = false; this.render(); return; }
         this.render(); this.timer = setTimeout(() => this.step(), 200);
       };
+      token.raf = requestAnimationFrame(frame);
     }
     stopAnim() {
       clearTimeout(this.timer);
-      if (this.anim) { const a = this.anim; this.anim = null; a.onfinish = null; a.cancel(); }
+      if (this.anim) { cancelAnimationFrame(this.anim.raf); this.anim = null; }
       if (this.an) this.an.forEach((e) => { e.style.visibility = 'hidden'; });
     }
     pause() { this.stopAnim(); this.playing = false; this.once = false; this.render(); }
@@ -1113,18 +1121,21 @@
     const prompt = dict ? set.prompt : 'pinyin';
     if (!chars.length) { viewStudy(lesson, idx); return; }
 
+    const trFixed = dict && prompt === 'trans';
     app.innerHTML = itemTop(lesson, idx, mode) + `
       <div class="wv split">
         <section class="prompt">
           ${dict ? promptChips() : ''}
-          <div class="abar" style="justify-content:center"><div class="abtns">
+          <div class="seghead"><span id="segno"></span><div class="bar"><i id="pbar"></i></div><span id="cno"></span></div>
+          <div class="segp" id="segp"></div>
+          <div class="ans big" id="ans"></div>
+          <div class="ptr" id="ptr"></div>
+          <div class="abar">
             <button class="abtn" data-act="seg">${I('vol')} ${esc(segs.length > 1 ? t('phrase') : t('listen'))}</button>
             <button class="abtn" data-act="segslow" aria-label="${esc(t('slow'))}">${I('slow')}</button>
             ${segs.length > 1 ? `<button class="abtn" data-act="say">${I('vol')} ${esc(t('whole'))}</button>` : ''}
-          </div></div>
-          <div class="segp" id="segp"></div>
-          <div class="ptr" id="ptr"></div>
-          <div class="ans" id="ans"></div>
+            ${trFixed ? '' : `<button class="abtn ghost ${set.showTr ? 'on' : ''}" data-act="trtoggle">${esc(t('pTrans'))}</button>`}
+          </div>
         </section>
         <section class="padwrap" id="padzone">
           <div class="padlabel" id="plabel"></div>
@@ -1140,12 +1151,17 @@
       </div>`;
     const $ = (id) => app.querySelector('#' + id);
     const segp = $('segp'); const ptr = $('ptr'); const ans = $('ans'); const plabel = $('plabel'); const stk = $('stk');
+    const segno = $('segno'); const cno = $('cno'); const pbar = $('pbar');
+    const drawTr = () => { ptr.innerHTML = (trFixed || set.showTr) ? transHTML(item) : ''; };
 
-    function slotsHTML(curIdx, finished) {
-      let ci = 0;
-      return groupsOf(item.tokens).map((g) => '<span class="grp">' + g.map((ti) => {
+    const firstCi = [];
+    { let n = 0; item.tokens.forEach((tk, ti) => { firstCi[ti] = n; if (tk.t === 'w') n += tk.chars.filter((c) => T.isHan(c)).length; }); }
+    function slotsHTML(curIdx, finished, range) {
+      const inR = (ti) => !range || (ti >= range[0] && ti < range[1]);
+      return groupsOf(item.tokens).map((g) => g.filter(inR)).filter((g) => g.length).map((g) => '<span class="grp">' + g.map((ti) => {
         const tk = item.tokens[ti];
         if (tk.t === 'p') return `<span class="pu">${esc(tk.h)}</span>`;
+        let ci = firstCi[ti];
         return tk.chars.map((c) => {
           if (!T.isHan(c)) return esc(c);
           const i = ci++; const r = results[i];
@@ -1157,7 +1173,7 @@
           else cls.push('tr0');
           return finished ? `<span class="${cls.join(' ')}">${txt}</span>` : `<button class="${cls.join(' ')}" data-act="jump" data-i="${i}">${txt}</button>`;
         }).join('');
-      }).join('') + '</span>').join('');
+      }).join('') + '</span>').join('<wbr>');
     }
 
     function update() {
@@ -1166,11 +1182,14 @@
       const si = segIdx(c.ti); const seg = segs[si];
       const tk = item.tokens[c.ti];
       const g = glossFor(tk.h);
-      const segLabel = segs.length > 1 ? `<span class="muted">${esc(t('segOf', si + 1, segs.length))}</span>` : '';
-      if (prompt === 'pinyin') segp.innerHTML = segLabel + pinyinHTML(item, { cap, hi: { ti: c.ti, si: c.ci }, range: seg ? [seg.from, seg.to] : null });
-      else segp.innerHTML = segLabel;
-      ptr.innerHTML = (!dict || prompt === 'trans') ? transHTML(item) : '';
-      ans.innerHTML = slotsHTML(cur, false);
+      const range = seg ? [seg.from, seg.to] : null;
+      segno.textContent = segs.length > 1 ? t('segOf', si + 1, segs.length) : '';
+      const doneN = results.filter(Boolean).length;
+      cno.textContent = `${doneN}/${chars.length}`;
+      pbar.style.width = `${Math.round(100 * doneN / chars.length)}%`;
+      segp.innerHTML = prompt === 'pinyin' ? pinyinHTML(item, { cap, hi: { ti: c.ti, si: c.ci }, range }) : '';
+      drawTr();
+      ans.innerHTML = slotsHTML(cur, false, range);
       const pos = tk.chars.length > 1 ? ` <span class="sub">${tk.chars.filter((x) => T.isHan(x)).length > 1 ? `(${c.ci + 1}/${tk.chars.length})` : ''}</span>` : '';
       const rp = `<button class="rp" data-act="seg" aria-label="${esc(t('listen'))}">${I('vol')}</button>`;
       if (!dict) plabel.innerHTML = `${rp}${sylHTML(c.syl, c.tone)}<span class="sub">${esc(tk.h)} — ${glossLine(g)}</span>`;
@@ -1207,8 +1226,10 @@
       const score = n ? Math.round(100 * (g + 0.5 * f) / n) : 0;
       recordItem(item.id, mode, score); invalidate();
       $('padzone').hidden = true;
-      plabel.innerHTML = ''; segp.innerHTML = cap || prompt === 'pinyin' ? pinyinHTML(item, { cap }) : '';
+      plabel.innerHTML = ''; segp.innerHTML = pinyinHTML(item, { cap });
+      segno.textContent = ''; cno.textContent = `${n}/${n}`; pbar.style.width = '100%';
       ptr.innerHTML = transHTML(item);
+      ans.classList.remove('big');
       ans.innerHTML = slotsHTML(-1, true);
       const wrong = chars.map((c, i) => ({ c, i })).filter(({ i }) => !results[i] || results[i].grade < 2);
       const res = $('result');
@@ -1227,19 +1248,21 @@
     function restartWith(list) {
       list.forEach((i) => { results[i] = null; });
       queue = list; qpos = 0; lastSeg = -1;
-      $('result').hidden = true; $('padzone').hidden = false;
+      $('result').hidden = true; $('padzone').hidden = false; ans.classList.add('big');
       startCur();
     }
 
     startCur();
-    requestAnimationFrame(() => {
-      const r = $('pad').getBoundingClientRect();
+    setTimeout(() => {
+      if (!app.contains(segp)) return;
       const split = getComputedStyle(app.querySelector('.wv')).gridTemplateColumns.split(' ').length > 1;
-      if (!split && r.bottom > innerHeight) {
-        const top = segp.getBoundingClientRect().top + window.scrollY - 64;
-        window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
-      }
-    });
+      if (split) return;
+      const topH = app.querySelector('.top').getBoundingClientRect().height;
+      const need = app.querySelector('.ptools').getBoundingClientRect().bottom + window.scrollY - innerHeight + 10;
+      const maxS = app.querySelector('.seghead').getBoundingClientRect().top + window.scrollY - topH - 10;
+      const target = Math.max(0, Math.min(need, maxS));
+      if (target > window.scrollY + 4) window.scrollTo({ top: target, behavior: 'smooth' });
+    }, 150);
     setView({
       destroy() { pad.destroy(); },
       act(a, el) {
@@ -1247,6 +1270,7 @@
         const c = chars[queue[qpos]];
         if (a === 'seg' || a === 'segslow') { const s = c ? segs[segIdx(c.ti)] : segs[0]; if (s) say(s.text, a === 'segslow'); }
         else if (a === 'say') say(full);
+        else if (a === 'trtoggle') { set.showTr = !set.showTr; save(); el.classList.toggle('on', set.showTr); drawTr(); }
         else if (a === 'hint') pad.hint();
         else if (a === 'reveal') pad.reveal();
         else if (a === 'restart') pad.restart();
@@ -1344,32 +1368,53 @@
 
   /* ------------------------------------------------------------------ tones */
   const TONE_MARK = { 1: 'ˉ', 2: 'ˊ', 3: 'ˇ', 4: 'ˋ', 5: '·' };
+  const TONE_ICON = {
+    1: '<path d="M6 8H34"/>', 2: '<path d="M8 20 32 5"/>', 3: '<path d="M6 6Q18 30 34 7"/>',
+    4: '<path d="M8 5 32 20"/>', 5: '<circle cx="20" cy="13" r="4" fill="currentColor" stroke="none"/>',
+  };
+  const toneIcon = (n) => `<svg class="ti t${n}" viewBox="0 0 40 26" aria-hidden="true">${TONE_ICON[n]}</svg>`;
   function viewTones(lesson, idx) {
     const item = lesson.items[idx];
     const set = S();
     const chars = T.charList(item.tokens);
     const st = chars.map((c) => (c.syl === 'r' ? { auto: true } : null));
     let pos = st.findIndex((x) => !x); let tries = 0; let busy = false; let alive = true;
+    const segs = T.segments(item.tokens);
+    const segOfTi = (ti) => Math.max(0, segs.findIndex((g) => ti >= g.from && ti < g.to));
     app.innerHTML = itemTop(lesson, idx, 'tones') + `
       <section class="prompt">
-        <div class="chips" style="justify-content:center;margin-bottom:10px">
-          <button class="chip ${set.toneSyl ? 'on' : ''}" data-act="tsyl">${esc(t('toneSyl'))}</button>
-          <button class="chip" data-act="say">${I('vol')} ${esc(t('listen'))}</button>
-        </div>
-        <p class="task" style="text-align:center">${esc(t('toneTask'))}</p>
+        <p class="task" style="text-align:center;margin-bottom:10px">${esc(t('toneTask'))}</p>
+        <div class="seghead"><span id="segno"></span><div class="bar"><i id="pbar"></i></div><span id="cno"></span></div>
         <div class="tline" id="tline"></div>
-        <div class="ptr">${transHTML(item)}</div>
+        <div class="ptr" id="ptr"></div>
+        <div class="abar">
+          <button class="abtn" data-act="seg">${I('vol')} ${esc(segs.length > 1 ? t('phrase') : t('listen'))}</button>
+          <button class="abtn ghost ${set.toneSyl ? 'on' : ''}" data-act="tsyl">${esc(t('toneSyl'))}</button>
+          <button class="abtn ghost ${set.showTr ? 'on' : ''}" data-act="trtoggle">${esc(t('pTrans'))}</button>
+        </div>
       </section>
       <div class="tkeys" id="tkeys">
-        ${[1, 2, 3, 4, 5].map((n) => `<button class="tkey" data-act="tone" data-v="${n}"><b class="t${n}">${TONE_MARK[n]}</b><span>${n === 5 ? esc(t('neutral')) : n}</span></button>`).join('')}
+        ${[1, 2, 3, 4, 5].map((n) => `<button class="tkey" data-act="tone" data-v="${n}" aria-label="${n === 5 ? esc(t('neutral')) : n} ${TONE_MARK[n]}">${toneIcon(n)}<span>${n === 5 ? esc(t('neutral')) : n}</span></button>`).join('')}
       </div>
       <p class="rhint" style="text-align:center">${esc(t('toneNote'))}</p>
       <section class="result" id="result" hidden style="margin-top:12px"></section>`;
     const line = app.querySelector('#tline');
+    const ptr = app.querySelector('#ptr');
+    const drawTr = () => { ptr.innerHTML = set.showTr ? transHTML(item) : ''; };
+    const firstCi = [];
+    { let n = 0; item.tokens.forEach((tk, ti) => { firstCi[ti] = n; if (tk.t === 'w') n += tk.chars.filter((c) => T.isHan(c)).length; }); }
+    const curSeg = () => (pos >= 0 && chars[pos] ? segs[segOfTi(chars[pos].ti)] : null);
     function draw(shakeIdx) {
-      let ci = 0;
-      line.innerHTML = item.tokens.map((tk) => {
+      const sg = curSeg();
+      const real = st.filter((x) => !x || !x.auto).length;
+      const doneN = st.filter((x) => x && !x.auto).length;
+      app.querySelector('#segno').textContent = sg && segs.length > 1 ? t('segOf', segs.indexOf(sg) + 1, segs.length) : '';
+      app.querySelector('#cno').textContent = `${doneN}/${real}`;
+      app.querySelector('#pbar').style.width = `${real ? Math.round(100 * doneN / real) : 100}%`;
+      line.innerHTML = item.tokens.map((tk, ti) => {
+        if (sg && (ti < sg.from || ti >= sg.to)) return '';
         if (tk.t === 'p') return `<span class="tcell pu"><span class="tm"></span><span class="tc">${esc(tk.h)}</span><span class="tb"></span></span>`;
+        let ci = firstCi[ti];
         return tk.chars.map((c, k) => {
           if (!T.isHan(c)) return '';
           const i = ci++; const s = st[i]; const ch = chars[i];
@@ -1384,6 +1429,7 @@
         }).join('');
       }).join('');
     }
+    drawTr();
     function advance() {
       const c = chars[pos];
       const tk = item.tokens[c.ti];
@@ -1428,6 +1474,8 @@
       act(a, el) {
         if (a === 'tone') answer(+el.dataset.v);
         else if (a === 'say') say(T.hanziOf(item.tokens));
+        else if (a === 'seg') { const sg = curSeg() || segs[segs.length - 1]; if (sg) say(sg.text); }
+        else if (a === 'trtoggle') { set.showTr = !set.showTr; save(); el.classList.toggle('on', set.showTr); drawTr(); }
         else if (a === 'tsyl') { S().toneSyl = !S().toneSyl; save(); el.classList.toggle('on', S().toneSyl); draw(); }
         else if (a === 'again') render();
       },
