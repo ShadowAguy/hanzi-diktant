@@ -1,0 +1,10 @@
+{
+  "name": "hanzi-diktant-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "hanzi-writer": "^3.7.2",
+    "opencc-js": "^1.0.5",
+    "pinyin-pro": "^3.26.0"
+  }
+}
