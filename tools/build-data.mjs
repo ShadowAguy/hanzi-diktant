@@ -382,8 +382,15 @@ async function main() {
     process.exitCode = 1;
     fail(`${failed.length} character(s) missing stroke data`);
   }
-  writeWindow(path.join(ROOT, 'data/strokes.js'), 'HZ_STROKES', strokes);
-  log(`Wrote data/strokes.js (${Object.keys(strokes).length} chars)`);
+  // Make Me a Hanzi data is brush style (kaiti). It is only the source for stroke order:
+  // tools/build-sans.py re-cuts every character from Noto Sans SC (print style) into data/strokes.js.
+  fs.mkdirSync(CACHE, { recursive: true });
+  fs.writeFileSync(path.join(CACHE, 'mmah-strokes.json'), JSON.stringify(strokes), 'utf8');
+  log(`Wrote tools/cache/mmah-strokes.json (${Object.keys(strokes).length} chars)`);
+  const py = path.join(TOOLS, '.venv/bin/python');
+  const sans = spawnSync(fs.existsSync(py) ? py : 'python3', [path.join(TOOLS, 'build-sans.py')], { stdio: 'inherit' });
+  if (sans.status !== 0) fail('tools/build-sans.py failed (needs tools/.venv with numpy scipy scikit-image opencv-python-headless fonttools)');
+  log('Wrote data/strokes.js (print style)');
 
   log('Fetching Make Me a Hanzi dictionary …');
   const dict = await fetchDictionary();

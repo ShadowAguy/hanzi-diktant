@@ -54,7 +54,7 @@
     showRu: true, showEn: true, ruby: false,
     hintAfter: 3, leniency: 1, autoplay: true, slowRate: 0.7,
     prompt: 'pinyin', paper: false, toneSyl: false, showTr: false,
-    strokeStyle: 'pen', reps: 3, dictTones: true,
+    reps: 3, toneQuiz: false,
   };
   const DB = (() => {
     try {
@@ -120,7 +120,6 @@
       rep: 'повтор', skipped: 'пропущено',
       toneQ: (c) => `Тон для «${c}»?`, toneScore: (a, b) => `тоны: ${a} из ${b}`, sylListen: 'Слушать слог', repsBtn: (n) => `Повтор ×${n || '∞'}`,
       prevChar: 'Предыдущий иероглиф', nextChar: 'Следующий иероглиф', prevSeg: 'Предыдущая фраза', nextSeg: 'Следующая фраза',
-      strokeStyle: 'Вид черт', strokeStyleV: ['Перо — ровная линия', 'Кисть — каллиграфия'],
       repsSet: 'Пропись: сколько раз писать каждый иероглиф',
       pos: { n: 'сущ.', v: 'гл.', adj: 'прил.', adv: 'нареч.', pron: 'мест.', part: 'част.', conj: 'союз', prep: 'предлог', interj: 'межд.', name: 'имя собств.', phr: 'выраж.' },
     },
@@ -164,7 +163,6 @@
       rep: 'rep', skipped: 'skipped',
       toneQ: (c) => `Tone of “${c}”?`, toneScore: (a, b) => `tones: ${a} of ${b}`, sylListen: 'Listen to the syllable', repsBtn: (n) => `Repeat ×${n || '∞'}`,
       prevChar: 'Previous character', nextChar: 'Next character', prevSeg: 'Previous phrase', nextSeg: 'Next phrase',
-      strokeStyle: 'Stroke style', strokeStyleV: ['Pen — even line', 'Brush — calligraphy'],
       repsSet: 'Trace: times to write each character',
       pos: { n: 'n.', v: 'v.', adj: 'adj.', adv: 'adv.', pron: 'pron.', part: 'part.', conj: 'conj.', prep: 'prep.', interj: 'interj.', name: 'proper n.', phr: 'phr.' },
     },
@@ -426,64 +424,28 @@
 
   /* ------------------------------------------------------------------ stroke data */
   const pending = {};
+  // hanzi-writer scores a finger stroke by its distance to the nearest median POINT, not segment,
+  // so long straight runs need a point every ~40 units or a correct stroke along the middle fails.
+  // The data files keep simplified medians; they are densified once here.
+  function densify(m, step = 40) {
+    const out = [m[0]];
+    for (let i = 1; i < m.length; i++) {
+      const [x1, y1] = m[i - 1]; const [x2, y2] = m[i];
+      const n = Math.max(1, Math.ceil(Math.hypot(x2 - x1, y2 - y1) / step));
+      for (let k = 1; k <= n; k++) out.push([Math.round(x1 + ((x2 - x1) * k) / n), Math.round(y1 + ((y2 - y1) * k) / n)]);
+    }
+    return out;
+  }
+  const prepared = {};
+  const prep = (ch, d) => prepared[ch] || (prepared[ch] = Object.assign({}, d, { medians: d.medians.map((m) => densify(m)) }));
   function getStrokeData(ch) {
-    if (STROKES[ch]) return Promise.resolve(STROKES[ch]);
+    if (STROKES[ch]) return Promise.resolve(prep(ch, STROKES[ch]));
     if (pending[ch]) return pending[ch];
     pending[ch] = fetch(`https://cdn.jsdelivr.net/npm/hanzi-writer-data@2.0.1/${enc(ch)}.json`)
       .then((r) => { if (!r.ok) throw new Error('no data'); return r.json(); })
-      .then((d) => { STROKES[ch] = d; return d; })
+      .then((d) => { STROKES[ch] = d; return prep(ch, d); })
       .catch((e) => { delete pending[ch]; throw e; });
     return pending[ch];
-  }
-
-  /* ------------------------------------------------------------------ pen style
-   * Make Me a Hanzi outlines come from a brush (kaiti) font. For pen copybook practice we draw
-   * every stroke as an even-width line along its median, the same line the quiz matches against.
-   * Outline = segment quads + round joints, all wound one way so the nonzero fill is their union. */
-  const PEN_W = 54;
-  const penCache = {};
-  // Drop brush artefacts from a median for display: the entry kink (起笔) and a short finishing tick (顿笔).
-  // Real hooks (钩) turn back by more than ~75° and are kept. Matching still uses the original medians.
-  function cleanMedian(src) {
-    const m = src.slice();
-    if (m.length < 3) return m;
-    const len = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const ang = (a, b, c) => {
-      const v1 = [b[0] - a[0], b[1] - a[1]]; const v2 = [c[0] - b[0], c[1] - b[1]];
-      const d = (v1[0] * v2[0] + v1[1] * v2[1]) / ((Math.hypot(v1[0], v1[1]) * Math.hypot(v2[0], v2[1])) || 1);
-      return (Math.acos(Math.max(-1, Math.min(1, d))) * 180) / Math.PI;
-    };
-    const total = m.slice(1).reduce((acc, p, i) => acc + len(m[i], p), 0);
-    while (m.length >= 3 && len(m[0], m[1]) < Math.max(40, 0.14 * total) && ang(m[0], m[1], m[2]) > 35) m.shift();
-    const n = m.length;
-    if (n >= 3) {
-      const a = ang(m[n - 3], m[n - 2], m[n - 1]);
-      if (len(m[n - 2], m[n - 1]) < Math.max(36, 0.1 * total) && a > 25 && a < 75) m.pop();
-    }
-    return m;
-  }
-  function penPath(src) {
-    const m = cleanMedian(src);
-    const r = PEN_W / 2; const parts = [];
-    const area = (pts) => pts.reduce((a, p, i) => { const q = pts[(i + 1) % pts.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0);
-    const poly = (pts) => { const o = area(pts) < 0 ? pts.slice().reverse() : pts; return 'M' + o.map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L') + ' Z'; };
-    m.forEach(([x, y]) => {
-      const c = []; for (let k = 0; k < 18; k++) { const a = (2 * Math.PI * k) / 18; c.push([x + r * Math.cos(a), y + r * Math.sin(a)]); }
-      parts.push(poly(c));
-    });
-    for (let i = 0; i < m.length - 1; i++) {
-      const [x1, y1] = m[i]; const [x2, y2] = m[i + 1];
-      const L = Math.hypot(x2 - x1, y2 - y1) || 1; const nx = (-(y2 - y1) / L) * r; const ny = ((x2 - x1) / L) * r;
-      parts.push(poly([[x1 + nx, y1 + ny], [x2 + nx, y2 + ny], [x2 - nx, y2 - ny], [x1 - nx, y1 - ny]]));
-    }
-    return parts.join(' ');
-  }
-  function getDrawData(ch) {
-    return getStrokeData(ch).then((d) => {
-      if (S().strokeStyle === 'brush') return d;
-      if (!penCache[ch]) penCache[ch] = Object.assign({}, d, { strokes: d.medians.map(penPath) });
-      return penCache[ch];
-    });
   }
 
   /* ------------------------------------------------------------------ stroke viewer (own SVG renderer) */
@@ -493,7 +455,7 @@
       this.host = host; this.ch = ch; this.o = o; this.k = 0; this.n = 0;
       this.playing = false; this.once = false; this.anim = null; this.timer = null; this.dead = false;
       host.innerHTML = gridSVG() + '<div class="sverr"></div>';
-      getDrawData(ch).then((d) => {
+      getStrokeData(ch).then((d) => {
         if (this.dead) return;
         this.d = d; this.n = d.strokes.length; this.build();
         this.k = o.autoplay ? 0 : this.n;
@@ -600,7 +562,7 @@
         highlightColor: '#ef6158', highlightCompleteColor: '#45c46d', radicalColor: null,
         drawingWidth: Math.max(4, Math.round(size / 68)), strokeAnimationSpeed: 1.1, delayBetweenStrokes: 200,
         charDataLoader: (c, onLoad, onError) => {
-          getDrawData(c).then(onLoad, (err) => { onError(err); this.fail(c); });
+          getStrokeData(c).then(onLoad, (err) => { onError(err); this.fail(c); });
         },
       }));
     }
@@ -683,7 +645,7 @@
     }
     fail(ch) {
       this.failed = true;
-      this.msg.hidden = false; this.msg.textContent = `${t('noStroke', ch)} — ${t('show')} ↓`;
+      this.msg.hidden = false; this.msg.textContent = t('noStroke', ch);
       this.progress();
     }
     resize() {
@@ -827,6 +789,32 @@
     if (han.length) show(han[0].i);
     say(tk.h);
   }
+  function openStrokeSheet(ch, syl, tone, onClose) {
+    closeSheets();
+    let viewer = null;
+    const sh = openSheet(`
+      <div class="sh-h so-h">
+        <div class="so-py">${syl ? sylHTML(syl, tone) : `<span class="hz">${esc(ch)}</span>`}</div>
+        <button class="rbtn" data-close aria-label="close">${I('x')}</button>
+      </div>
+      <div class="so-n"></div>
+      <div class="sv"></div>
+      <div class="svbar">
+        <button class="pill" data-so="prev" aria-label="previous stroke">${I('prev')}</button>
+        <button class="pill" data-so="play" aria-label="play / pause">${I('pause')}</button>
+        <button class="pill" data-so="next" aria-label="next stroke">${I('next')}</button>
+      </div>`, { cls: 'so', onClose: () => { if (viewer) viewer.destroy(); viewer = null; if (onClose) onClose(); } });
+    const nEl = sh.el.querySelector('.so-n'); const playBtn = sh.el.querySelector('[data-so="play"]');
+    viewer = new StrokeViewer(sh.el.querySelector('.sv'), ch, {
+      autoplay: true, loop: true,
+      onState(st) { if (st.n) nEl.textContent = t('strokes', st.n); playBtn.innerHTML = st.playing ? I('pause') : I('play'); },
+    });
+    sh.el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-so]'); if (!b || !viewer) return;
+      if (b.dataset.so === 'prev') viewer.prev(); else if (b.dataset.so === 'next') viewer.next(); else viewer.toggle();
+    });
+    return sh;
+  }
   function charToken(ch) {
     const it = charItem(ch, null);
     return T.parse(it.s)[0];
@@ -845,7 +833,6 @@
           <div><h4>${esc(t('uiLang'))}</h4>${seg('ui', [['ru', 'Русский'], ['en', 'English']])}</div>
           <div><h4>${esc(t('translations'))}</h4>${sw('showRu', 'Русский (RU)')}${sw('showEn', 'English (EN)')}</div>
           <div>${sw('ruby', t('ruby'))}${sw('autoplay', t('autoplay'))}</div>
-          <div><h4>${esc(t('strokeStyle'))}</h4>${seg('strokeStyle', [['pen', t('strokeStyleV')[0]], ['brush', t('strokeStyleV')[1]]])}</div>
           <div><h4>${esc(t('repsSet'))}</h4>${seg('reps', [[1, '×1'], [3, '×3'], [5, '×5'], [0, '∞']])}</div>
           <div><h4>${esc(t('hintAfter'))}</h4>${seg('hintAfter', [[1, '1'], [2, '2'], [3, '3'], [5, '5'], [0, t('never')]])}</div>
           <div><h4>${esc(t('strict'))}</h4>${seg('leniency', [[0.75, t('strictV')[0]], [1, t('strictV')[1]], [1.35, t('strictV')[2]]])}</div>
@@ -1174,7 +1161,7 @@
     return `<div class="chips" style="justify-content:center;margin-bottom:12px">
       <button class="chip ${!S().paper ? 'on' : ''}" data-act="paper" data-v="0">${I('tablet')} ${esc(t('onScreen'))}</button>
       <button class="chip ${S().paper ? 'on' : ''}" data-act="paper" data-v="1">${I('paper')} ${esc(t('onPaper'))}</button>
-      ${!S().paper ? `<button class="chip ${S().dictTones ? 'on' : ''}" data-act="dtones">${I('tone')} ${esc(t('tones'))}</button>` : ''}
+      ${!S().paper ? `<button class="chip ${S().toneQuiz ? 'on' : ''}" data-act="dtones">${I('tone')} ${esc(t('tones'))}</button>` : ''}
       <span style="width:8px"></span>
       ${[['pinyin', 'pPinyin'], ['trans', 'pTrans'], ['audio', 'pAudio']].map(([v, k]) => `<button class="chip ${p === v ? 'on' : ''}" data-act="prompt" data-v="${v}">${esc(t(k))}</button>`).join('')}
     </div>`;
@@ -1182,7 +1169,7 @@
   function chipActs(a, el) {
     if (a === 'prompt') { S().prompt = el.dataset.v; save(); render(); return true; }
     if (a === 'paper') { S().paper = el.dataset.v === '1'; save(); render(); return true; }
-    if (a === 'dtones') { S().dictTones = !S().dictTones; save(); render(); return true; }
+    if (a === 'dtones') { S().toneQuiz = !S().toneQuiz; save(); render(); return true; }
     return false;
   }
 
@@ -1201,7 +1188,7 @@
     const results = new Array(chars.length).fill(null);
     let lastSeg = -1;
     const prompt = dict ? set.prompt : 'pinyin';
-    const toneStep = dict && set.dictTones !== false;
+    const toneStep = dict && !!set.toneQuiz;
     const toneRes = new Array(chars.length).fill(null);
     let awaiting = null; let toneBusy = false;
     if (!chars.length) { viewStudy(lesson, idx); return; }
@@ -1221,7 +1208,6 @@
           <div class="abar">
             <button class="abtn" data-act="seg">${I('vol')} ${esc(segs.length > 1 ? t('phrase') : t('listen'))}</button>
             <button class="abtn" data-act="segslow" aria-label="${esc(t('slow'))}">${I('slow')}</button>
-            ${segs.length > 1 ? `<button class="abtn" data-act="say">${I('vol')} ${esc(t('whole'))}</button>` : ''}
             ${trFixed ? '' : `<button class="abtn ghost ${set.showTr ? 'on' : ''}" data-act="trtoggle">${esc(t('pTrans'))}</button>`}
           </div>
         </section>
@@ -1240,7 +1226,7 @@
             <button class="tbtn" data-act="reveal">${I('eye')} ${esc(t('show'))}</button>
             <button class="tbtn" data-act="restart">${I('redo')} ${esc(t('again'))}</button>
           </div>
-          <div class="stkrow" id="stkrow"><span class="stk" id="stk"></span>${dict ? '' : `<button class="repbtn" data-act="reps" id="repbtn">${esc(t('repsBtn', set.reps))}</button>`}</div>
+          <div class="stkrow" id="stkrow" ${dict ? 'hidden' : ''}><span class="stk" id="stk"></span><button class="repbtn" data-act="reps" id="repbtn">${esc(t('repsBtn', set.reps))}</button></div>
         </section>
         <section class="result" id="result" hidden></section>
       </div>`;
@@ -1296,10 +1282,9 @@
     }
     let repDone = 0;
     const repTarget = () => (dict ? 1 : set.reps);
-    function progress(p) {
+    function progress() {
       const tgt = repTarget();
-      const repTxt = !dict && tgt !== 1 ? ` · ${t('rep')} ${repDone + 1}/${tgt || '∞'}` : '';
-      stk.textContent = p && p.total ? `${t('strokes', p.total)} · ${p.strokeNum}/${p.total}${p.mistakes ? ` · ✗ ${p.mistakes}` : ''}${repTxt}` : repTxt.replace(/^ · /, '');
+      stk.textContent = !dict && tgt !== 1 ? `${t('rep')} ${repDone + 1}/${tgt || '∞'}` : '';
     }
     const pad = new Pad($('pad'), {
       outline: !dict,
@@ -1313,12 +1298,21 @@
         if (toneStep && chars[ci].syl !== 'r') { askTone(ci); return; }
         repDone += 1;
         const tgt = repTarget();
-        if (!dict && !r.revealed && (tgt === 0 || repDone < tgt)) { update(); pad.start(chars[ci].ch); progress(pad); return; }
+        if (!dict && !r.revealed && (tgt === 0 || repDone < tgt)) { update(); pad.start(chars[ci].ch); progress(); return; }
         goTo(qpos + 1);
       },
     });
-    function startCur() { hideTone(); update(); pad.start(chars[queue[qpos]].ch); progress(null); }
-    function hideTone() { awaiting = null; toneBusy = false; $('tonepick').hidden = true; $('ptools').hidden = false; $('stkrow').hidden = false; }
+    function startCur() { hideTone(); update(); if (dict) pad.o.outline = false; pad.start(chars[queue[qpos]].ch); progress(); }
+    function hideTone() { awaiting = null; toneBusy = false; $('tonepick').hidden = true; $('ptools').hidden = false; $('stkrow').hidden = dict; }
+    // "Show": stroke order in a sheet. In dictation it counts as a hint and leaves the outline on for this character.
+    function showOrder() {
+      const c = chars[queue[qpos]]; if (!c) return;
+      if (pad.failed) { pad.reveal(); return; }
+      if (dict) { pad.usedHint = true; }
+      openStrokeSheet(c.ch, c.syl === 'r' ? null : c.syl, c.tone, () => {
+        if (dict && app.contains(segp) && !pad.done && chars[queue[qpos]] === c) pad.setOutline(true);
+      });
+    }
     function askTone(ci) {
       awaiting = ci;
       plabel.innerHTML = `<span class="tp-q">${esc(t('toneQ', chars[ci].ch))}</span>`;
@@ -1400,7 +1394,8 @@
       const split = getComputedStyle(app.querySelector('.wv')).gridTemplateColumns.split(' ').length > 1;
       if (split) return;
       const topH = app.querySelector('.top').getBoundingClientRect().height;
-      const need = app.querySelector('.ptools').getBoundingClientRect().bottom + window.scrollY - innerHeight + 10;
+      const last = !dict && set.reps !== 1 ? $('stkrow') : app.querySelector('.ptools');
+      const need = last.getBoundingClientRect().bottom + window.scrollY - innerHeight + 10;
       const maxS = app.querySelector('.seghead').getBoundingClientRect().top + window.scrollY - topH - 10;
       const target = Math.max(0, Math.min(need, maxS));
       if (target > window.scrollY + 4) window.scrollTo({ top: target, behavior: 'smooth' });
@@ -1421,10 +1416,10 @@
         else if (a === 'segnext') goSeg(1);
         else if (a === 'reps') {
           const order = [1, 3, 5, 0]; set.reps = order[(order.indexOf(set.reps) + 1) % order.length]; save();
-          el.textContent = t('repsBtn', set.reps); progress(pad);
+          el.textContent = t('repsBtn', set.reps); progress();
         }
         else if (a === 'hint') pad.hint();
-        else if (a === 'reveal') pad.reveal();
+        else if (a === 'reveal') showOrder();
         else if (a === 'restart') pad.restart();
         else if (a === 'retry') restartWith(chars.map((_, i) => i).filter((i) => !results[i] || results[i].grade < 2));
         else if (a === 'again') restartWith(chars.map((_, i) => i));
