@@ -801,7 +801,7 @@
     }, { passive: true });
   }
   // Stroke order, TrainChinese style. list = [{ch, syl, tone}]; ‹ › and swipe move between characters.
-  function openStrokeSheet(list, start, onClose) {
+  function openStrokeSheet(list, start, onClose, onChange) {
     closeSheets();
     let viewer = null; let idx = start;
     const many = list.length > 1;
@@ -824,7 +824,9 @@
     const nEl = sh.el.querySelector('.so-n'); const playBtn = sh.el.querySelector('[data-so="play"]');
     const py = sh.el.querySelector('.so-py'); const stage = sh.el.querySelector('.so-stage'); const def = sh.el.querySelector('.so-def');
     function show(k) {
+      const was = idx;
       idx = Math.max(0, Math.min(list.length - 1, k));
+      if (onChange && idx !== was) onChange(idx);
       const c = list[idx];
       py.innerHTML = (c.syl && c.syl !== 'r' ? sylHTML(c.syl, c.tone) : '') + `<span class="hz">${esc(c.ch)}</span>`;
       // meaning of the character, plus the word it is part of in this phrase
@@ -1360,11 +1362,9 @@
       const cur = queue[qpos];
       // dictation: only the current character (browsing others would give answers away)
       const list = (dict ? [c] : chars).map((x) => Object.assign({ word: item.tokens[x.ti].h }, x));
-      openStrokeSheet(list, dict ? 0 : cur, (k) => {
-        if (!app.contains(segp)) return;
-        if (dict) { if (!pad.done && chars[queue[qpos]] === c) pad.setOutline(true); return; }
-        if (k !== cur) jumpTo(k);
-      });
+      openStrokeSheet(list, dict ? 0 : cur, () => {
+        if (dict && app.contains(segp) && !pad.done && chars[queue[qpos]] === c) pad.setOutline(true);
+      }, dict ? null : (k) => { if (app.contains(segp)) jumpTo(k); });
     }
     function askTone(ci) {
       awaiting = ci;
@@ -1390,7 +1390,7 @@
     function jumpTo(i) {
       if (i === queue[qpos]) return;
       const k = queue.indexOf(i);
-      if (k >= qpos) { goTo(k); return; }
+      if (k >= 0) { goTo(k); return; }
       const rest = queue.slice(qpos).filter((x) => x !== i);
       results[i] = null;
       queue = [i].concat(rest); qpos = 0; repDone = 0;
