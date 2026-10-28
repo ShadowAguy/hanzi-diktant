@@ -401,8 +401,11 @@ button.slot:active { background: var(--card2); }
 .so-nav.fwd svg.i { transform: scaleX(-1); }
 .so-nav:disabled { opacity: .35; }
 .so-stage { touch-action: pan-y; }
+.so-def { margin: 2px 0 8px; font-size: 15px; color: #d6d6dc; line-height: 1.45; }
+.so-def:empty { display: none; }
+.so-def .hz { font-size: 17px; color: var(--mute); margin-right: 4px; }
 .so-n { text-align: center; font-weight: 600; font-size: 17px; margin: 0 0 10px; font-variant-numeric: tabular-nums; }
-.so .sv { width: min(100%, 420px, calc(100svh - 300px)); min-width: 220px; }
+.so .sv { width: min(100%, 420px, calc(100svh - 350px)); min-width: 220px; }
 .so .svbar { margin-top: 16px; }
 .ctabs { display: flex; gap: 8px; justify-content: center; margin: 14px 0 6px; flex-wrap: wrap; }
 .ctab { width: 54px; height: 54px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); font: 28px/1 var(--hz); }

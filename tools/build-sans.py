@@ -1309,6 +1309,79 @@ def _work(ch):
     return ch, res, note, time.time() - t0
 
 
+def stroke_geom(path):
+    """svg path (outers clockwise, holes counter-clockwise) -> shapely geometry"""
+    outs, holes = [], []
+    for sp in re.findall(r'M[^M]*', path):
+        pts = flatten_path(sp)
+        if not pts or len(pts[0]) < 3:
+            continue
+        (outs if signed_area(pts[0]) < 0 else holes).append(Polygon(pts[0]).buffer(0))
+    g = unary_union(outs)
+    return g.difference(unary_union(holes)) if holes else g
+
+
+def square_joints(res, pieces):
+    """Strokes cut out of a shared font contour end in round bumps (they poke into the next stroke)
+    and leave the corner to someone else, so a half-drawn character looks blobby / disconnected.
+    For each such stroke: clip it to a straight-sided tube of its own width along its median, and
+    push its ends on through the joint (inside the same contour), so it ends square like a pen
+    stroke. Anything that ends up uncovered goes back to its old owner, so no holes appear."""
+    from shapely.geometry import LineString, Point
+    pgeo = []
+    for pc in pieces:
+        g = Polygon(pc['outer']).buffer(0)
+        if pc['holes']:
+            g = g.difference(unary_union([Polygon(h).buffer(0) for h in pc['holes']]))
+        pgeo.append(g)
+    old = [stroke_geom(x) for x in res['strokes']]
+    new = list(old)
+    touched = set()
+    for i, (g, med) in enumerate(zip(old, res['medians'])):
+        if len(med) < 2 or g.is_empty:
+            continue
+        mine = [q for q in pgeo if q.intersection(g).area > 0.15 * g.area]
+        if not mine:
+            continue
+        host = unary_union(mine)
+        if host.difference(g).area < 0.05 * host.area:
+            continue                          # the stroke is its whole contour: leave the font shape
+        line = LineString(med)
+        pts = [line.interpolate(t, normalized=True) for t in np.linspace(0.15, 0.85, 15)]
+        ds = sorted(g.boundary.distance(q) for q in pts if g.contains(q))
+        if not ds:
+            continue
+        hw = max(10.0, ds[len(ds) // 3])
+        def extend(a, b, L):
+            dx, dy = a[0] - b[0], a[1] - b[1]
+            n = math.hypot(dx, dy) or 1
+            return (a[0] + dx / n * L, a[1] + dy / n * L)
+        far = lambda end, seq: next((q for q in seq if math.hypot(q[0] - end[0], q[1] - end[1]) > 25), seq[-1])
+        L = 2 * hw + 24
+        ext = [extend(med[0], far(med[0], med[1:]), L)] + [tuple(q) for q in med] + [extend(med[-1], far(med[-1], med[:-1][::-1]), L)]
+        tube = LineString(ext).buffer(hw * 1.18, cap_style=2, join_style=2, mitre_limit=2.5)
+        cand = tube.intersection(host)
+        if cand.is_empty or cand.area < 0.6 * g.area:
+            continue
+        new[i] = cand
+        touched.add(i)
+    if not touched:
+        return res
+    allg = unary_union(old)
+    hole = allg.difference(unary_union(new))
+    if hole.area > 1:
+        for i in range(len(new)):
+            back = old[i].intersection(hole)
+            if back.area > 0:
+                new[i] = unary_union([new[i], back])
+                touched.add(i)
+    for i in touched:
+        paths = geom_paths(new[i])
+        if paths:
+            res['strokes'][i] = ' '.join(paths)
+    return res
+
+
 def drop_detached(res):
     """Remove parts of a stroke's outline that are detached from the stroke body (never touched by
     its own median). They are copies of another stroke's tip and would flash as a loose blob."""
@@ -1358,6 +1431,32 @@ def drop_detached(res):
     return res
 
 
+MARGIN_SCALE = 0.86          # the font fills its em box; shrink about the box centre so the
+MARGIN_CX, MARGIN_CY = 512, 388   # character sits inside the grid with a margin, like a copybook
+
+
+def scale_path(d, k=MARGIN_SCALE, cx=MARGIN_CX, cy=MARGIN_CY):
+    fx = lambda v: round(cx + (float(v) - cx) * k)
+    fy = lambda v: round(cy + (float(v) - cy) * k)
+    out = []
+    for cmd, args in re.findall(r'([MLHVQCZmlhvqcz])([^MLHVQCZmlhvqcz]*)', d):
+        nums = re.findall(r'-?\d*\.?\d+(?:e-?\d+)?', args)
+        if cmd in 'Hh':
+            vals = [fx(v) for v in nums]
+        elif cmd in 'Vv':
+            vals = [fy(v) for v in nums]
+        else:
+            vals = [fx(v) if i % 2 == 0 else fy(v) for i, v in enumerate(nums)]
+        out.append(cmd + ' '.join(str(v) for v in vals))
+    return ''.join(out)
+
+
+def add_margin(res, k=MARGIN_SCALE):
+    res['strokes'] = [scale_path(x, k) for x in res['strokes']]
+    res['medians'] = [[[round(MARGIN_CX + (x - MARGIN_CX) * k), round(MARGIN_CY + (y - MARGIN_CY) * k)] for x, y in m] for m in res['medians']]
+    return res
+
+
 def main():
     global _SRC, _OV, _DBG
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
@@ -1385,14 +1484,19 @@ def main():
     print(f'built {len(chars)} chars in {time.time() - t0:.0f}s')
     hf = CACHE / 'human-strokes.json'
     hs = json.loads(hf.read_text(encoding='utf-8')) if hf.exists() else {}
-    hs.update(reg)
+    hs.update({c: [[[MARGIN_CX + (x - MARGIN_CX) * MARGIN_SCALE, MARGIN_CY + (y - MARGIN_CY) * MARGIN_SCALE] for x, y in m] for m in v] for c, v in reg.items()})
     hf.write_text(json.dumps(hs, ensure_ascii=False), encoding='utf-8')
     if preview:
         (CACHE / 'sans-preview.json').write_text(json.dumps(out, ensure_ascii=False), encoding='utf-8')
     if not preview:
         target = ROOT / 'data' / 'strokes.js'
+        font = load_font(list(src))
+        pieces_by_char = {c: glyph_pieces(font, c) for c in out if 'BRUSH' not in notes.get(c, '')}
         for c in out:
+            if pieces_by_char.get(c):
+                square_joints(out[c], pieces_by_char[c])
             drop_detached(out[c])
+            add_margin(out[c])
         target.write_text('window.HZ_STROKES = ' + json.dumps({c: out[c] for c in src}, ensure_ascii=False, separators=(',', ':')) + ';\n', encoding='utf-8')
         print('wrote', target, target.stat().st_size, 'bytes')
     prefix = 'verify-preview' if preview else 'verify'

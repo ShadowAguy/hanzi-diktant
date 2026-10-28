@@ -813,6 +813,7 @@
           <button class="rbtn" data-close aria-label="close">${I('x')}</button>
         </div>
       </div>
+      <div class="so-def"></div>
       <div class="so-n"></div>
       <div class="so-stage"><div class="sv"></div></div>
       <div class="svbar">
@@ -821,11 +822,21 @@
         <button class="pill" data-so="next" aria-label="next stroke">${I('next')}</button>
       </div>`, { cls: 'so', onClose: () => { if (viewer) viewer.destroy(); viewer = null; if (onClose) onClose(idx); } });
     const nEl = sh.el.querySelector('.so-n'); const playBtn = sh.el.querySelector('[data-so="play"]');
-    const py = sh.el.querySelector('.so-py'); const stage = sh.el.querySelector('.so-stage');
+    const py = sh.el.querySelector('.so-py'); const stage = sh.el.querySelector('.so-stage'); const def = sh.el.querySelector('.so-def');
     function show(k) {
       idx = Math.max(0, Math.min(list.length - 1, k));
       const c = list[idx];
       py.innerHTML = (c.syl && c.syl !== 'r' ? sylHTML(c.syl, c.tone) : '') + `<span class="hz">${esc(c.ch)}</span>`;
+      // meaning of the character, plus the word it is part of in this phrase
+      const info = CHARS[c.ch] || {};
+      const lines = [];
+      const cm = glossLine({ ru: info.ru, en: info.en });
+      if (cm) lines.push(`<div><span class="hz">${esc(c.ch)}</span> ${cm}</div>`);
+      if (c.word && c.word.length > 1) {
+        const wg = glossLine(glossFor(c.word));
+        if (wg) lines.push(`<div><span class="hz">${esc(c.word)}</span> ${wg}</div>`);
+      }
+      def.innerHTML = lines.join('');
       nEl.textContent = '';
       sh.el.querySelectorAll('.so-nav').forEach((b) => { b.disabled = b.dataset.so === 'cprev' ? idx === 0 : idx === list.length - 1; });
       if (viewer) viewer.destroy();
@@ -1348,7 +1359,7 @@
       if (dict) { pad.usedHint = true; }
       const cur = queue[qpos];
       // dictation: only the current character (browsing others would give answers away)
-      const list = dict ? [c] : chars;
+      const list = (dict ? [c] : chars).map((x) => Object.assign({ word: item.tokens[x.ti].h }, x));
       openStrokeSheet(list, dict ? 0 : cur, (k) => {
         if (!app.contains(segp)) return;
         if (dict) { if (!pad.done && chars[queue[qpos]] === c) pad.setOutline(true); return; }
