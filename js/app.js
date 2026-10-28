@@ -476,13 +476,7 @@
       this.an = Array.from(this.host.querySelectorAll('.sv-an'));
     }
     render() {
-      if (this.fg) {
-        const step = !this.playing;
-        this.fg.forEach((p, i) => {
-          p.classList.toggle('on', i < this.k);
-          p.classList.toggle('cur', step && i === this.k - 1 && this.k < this.n);
-        });
-      }
+      if (this.fg) this.fg.forEach((p, i) => p.classList.toggle('on', i < this.k));
       this.emit();
     }
     emit() { if (this.o.onState) this.o.onState({ k: this.k, n: this.n, playing: this.playing }); }
@@ -509,7 +503,7 @@
       const ease = (x) => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
       el.setAttribute('stroke-dashoffset', len);
       el.style.visibility = 'visible';
-      const token = {}; this.anim = token;
+      const token = { i }; this.anim = token;
       const t0 = performance.now();
       const frame = (now) => {
         if (this.anim !== token) return;
@@ -528,10 +522,17 @@
       if (this.anim) { cancelAnimationFrame(this.anim.raf); this.anim = null; }
       if (this.an) this.an.forEach((e) => { e.style.visibility = 'hidden'; });
     }
-    pause() { this.stopAnim(); this.playing = false; this.once = false; this.render(); }
+    // Pausing mid-stroke finishes that stroke instead of dropping it, so nothing jumps back.
+    pause() {
+      const mid = this.anim;
+      this.stopAnim();
+      if (mid) this.k = mid.i + 1;
+      this.playing = false; this.once = false; this.render();
+    }
     toggle() { if (this.playing && !this.once) this.pause(); else this.play(); }
     next() {
       if (!this.d) return;
+      if (this.anim) { this.pause(); return; }
       this.pause();
       if (this.k >= this.n) { this.k = 0; this.render(); return; }
       this.playing = true; this.once = true; this.render(); this.step();
@@ -789,30 +790,60 @@
     if (han.length) show(han[0].i);
     say(tk.h);
   }
-  function openStrokeSheet(ch, syl, tone, onClose) {
+  // horizontal swipe on an element (touch); ignores mostly-vertical moves
+  function onSwipe(el, fn) {
+    let x0 = null; let y0 = 0;
+    el.addEventListener('touchstart', (e) => { if (e.touches.length !== 1) { x0 = null; return; } x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+    el.addEventListener('touchend', (e) => {
+      if (x0 == null) return;
+      const t0 = e.changedTouches[0]; const dx = t0.clientX - x0; const dy = t0.clientY - y0; x0 = null;
+      if (Math.abs(dx) > 50 && Math.abs(dx) > 1.6 * Math.abs(dy)) fn(dx < 0 ? 1 : -1);
+    }, { passive: true });
+  }
+  // Stroke order, TrainChinese style. list = [{ch, syl, tone}]; ‹ › and swipe move between characters.
+  function openStrokeSheet(list, start, onClose) {
     closeSheets();
-    let viewer = null;
+    let viewer = null; let idx = start;
+    const many = list.length > 1;
     const sh = openSheet(`
       <div class="sh-h so-h">
-        <div class="so-py">${syl ? sylHTML(syl, tone) : `<span class="hz">${esc(ch)}</span>`}</div>
-        <button class="rbtn" data-close aria-label="close">${I('x')}</button>
+        <div class="so-py"></div>
+        <div class="rbtns-top">
+          ${many ? `<button class="rbtn so-nav" data-so="cprev" aria-label="${esc(t('prevChar'))}">${I('back')}</button><button class="rbtn so-nav fwd" data-so="cnext" aria-label="${esc(t('nextChar'))}">${I('back')}</button>` : ''}
+          <button class="rbtn" data-close aria-label="close">${I('x')}</button>
+        </div>
       </div>
       <div class="so-n"></div>
-      <div class="sv"></div>
+      <div class="so-stage"><div class="sv"></div></div>
       <div class="svbar">
         <button class="pill" data-so="prev" aria-label="previous stroke">${I('prev')}</button>
         <button class="pill" data-so="play" aria-label="play / pause">${I('pause')}</button>
         <button class="pill" data-so="next" aria-label="next stroke">${I('next')}</button>
-      </div>`, { cls: 'so', onClose: () => { if (viewer) viewer.destroy(); viewer = null; if (onClose) onClose(); } });
+      </div>`, { cls: 'so', onClose: () => { if (viewer) viewer.destroy(); viewer = null; if (onClose) onClose(idx); } });
     const nEl = sh.el.querySelector('.so-n'); const playBtn = sh.el.querySelector('[data-so="play"]');
-    viewer = new StrokeViewer(sh.el.querySelector('.sv'), ch, {
-      autoplay: true, loop: true,
-      onState(st) { if (st.n) nEl.textContent = t('strokes', st.n); playBtn.innerHTML = st.playing ? I('pause') : I('play'); },
-    });
+    const py = sh.el.querySelector('.so-py'); const stage = sh.el.querySelector('.so-stage');
+    function show(k) {
+      idx = Math.max(0, Math.min(list.length - 1, k));
+      const c = list[idx];
+      py.innerHTML = (c.syl && c.syl !== 'r' ? sylHTML(c.syl, c.tone) : '') + `<span class="hz">${esc(c.ch)}</span>`;
+      nEl.textContent = '';
+      sh.el.querySelectorAll('.so-nav').forEach((b) => { b.disabled = b.dataset.so === 'cprev' ? idx === 0 : idx === list.length - 1; });
+      if (viewer) viewer.destroy();
+      stage.innerHTML = '<div class="sv"></div>';
+      viewer = new StrokeViewer(stage.firstChild, c.ch, {
+        autoplay: true, loop: true,
+        onState(st) { if (st.n) nEl.textContent = t('strokes', st.n); playBtn.innerHTML = st.playing ? I('pause') : I('play'); },
+      });
+    }
     sh.el.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-so]'); if (!b || !viewer) return;
-      if (b.dataset.so === 'prev') viewer.prev(); else if (b.dataset.so === 'next') viewer.next(); else viewer.toggle();
+      const b = e.target.closest('[data-so]'); if (!b) return;
+      const a = b.dataset.so;
+      if (a === 'cprev') show(idx - 1); else if (a === 'cnext') show(idx + 1);
+      else if (!viewer) return;
+      else if (a === 'prev') viewer.prev(); else if (a === 'next') viewer.next(); else if (a === 'play') viewer.toggle();
     });
+    if (many) onSwipe(sh.el, (d) => { if (idx + d >= 0 && idx + d < list.length) show(idx + d); });
+    show(start);
     return sh;
   }
   function charToken(ch) {
@@ -1226,12 +1257,11 @@
             <button class="tbtn" data-act="reveal">${I('eye')} ${esc(t('show'))}</button>
             <button class="tbtn" data-act="restart">${I('redo')} ${esc(t('again'))}</button>
           </div>
-          <div class="stkrow" id="stkrow" ${dict ? 'hidden' : ''}><span class="stk" id="stk"></span><button class="repbtn" data-act="reps" id="repbtn">${esc(t('repsBtn', set.reps))}</button></div>
         </section>
         <section class="result" id="result" hidden></section>
       </div>`;
     const $ = (id) => app.querySelector('#' + id);
-    const segp = $('segp'); const ptr = $('ptr'); const ans = $('ans'); const plabel = $('plabel'); const stk = $('stk');
+    const segp = $('segp'); const ptr = $('ptr'); const ans = $('ans'); const plabel = $('plabel');
     const segno = $('segno'); const cno = $('cno'); const pbar = $('pbar');
     const drawTr = () => { ptr.innerHTML = (trFixed || set.showTr) ? transHTML(item) : ''; };
 
@@ -1284,7 +1314,8 @@
     const repTarget = () => (dict ? 1 : set.reps);
     function progress() {
       const tgt = repTarget();
-      stk.textContent = !dict && tgt !== 1 ? `${t('rep')} ${repDone + 1}/${tgt || '∞'}` : '';
+      const b = $('repbtn'); if (!b) return;
+      b.innerHTML = `${I('redo')}<span>${tgt === 1 ? '×1' : `${repDone + 1}/${tgt || '∞'}`}</span>`;
     }
     const pad = new Pad($('pad'), {
       outline: !dict,
@@ -1302,22 +1333,33 @@
         goTo(qpos + 1);
       },
     });
-    function startCur() { hideTone(); update(); if (dict) pad.o.outline = false; pad.start(chars[queue[qpos]].ch); progress(); }
-    function hideTone() { awaiting = null; toneBusy = false; $('tonepick').hidden = true; $('ptools').hidden = false; $('stkrow').hidden = dict; }
+    let fitReady = false;
+    if (!dict) $('pad').insertAdjacentHTML('beforeend', `<button class="repbadge" data-act="reps" id="repbtn" aria-label="${esc(t('repsSet'))}"></button>`);
+    function startCur() {
+      hideTone(); update(); if (dict) pad.o.outline = false; progress();
+      if (fitReady) fitPad(true);
+      pad.start(chars[queue[qpos]].ch);
+    }
+    function hideTone() { awaiting = null; toneBusy = false; $('tonepick').hidden = true; $('ptools').hidden = false; }
     // "Show": stroke order in a sheet. In dictation it counts as a hint and leaves the outline on for this character.
     function showOrder() {
       const c = chars[queue[qpos]]; if (!c) return;
       if (pad.failed) { pad.reveal(); return; }
       if (dict) { pad.usedHint = true; }
-      openStrokeSheet(c.ch, c.syl === 'r' ? null : c.syl, c.tone, () => {
-        if (dict && app.contains(segp) && !pad.done && chars[queue[qpos]] === c) pad.setOutline(true);
+      const cur = queue[qpos];
+      // dictation: only the current character (browsing others would give answers away)
+      const list = dict ? [c] : chars;
+      openStrokeSheet(list, dict ? 0 : cur, (k) => {
+        if (!app.contains(segp)) return;
+        if (dict) { if (!pad.done && chars[queue[qpos]] === c) pad.setOutline(true); return; }
+        if (k !== cur) jumpTo(k);
       });
     }
     function askTone(ci) {
       awaiting = ci;
       plabel.innerHTML = `<span class="tp-q">${esc(t('toneQ', chars[ci].ch))}</span>`;
       $('tonepick').querySelectorAll('.tkey').forEach((b) => b.classList.remove('ok', 'bad'));
-      $('ptools').hidden = true; $('stkrow').hidden = true; $('tonepick').hidden = false;
+      $('ptools').hidden = true; $('tonepick').hidden = false;
       const r = $('tonepick').getBoundingClientRect();
       if (r.bottom > innerHeight) window.scrollBy({ top: r.bottom - innerHeight + 8, behavior: 'smooth' });
     }
@@ -1333,6 +1375,15 @@
       plabel.innerHTML = `<span class="tp-q"><span class="hz">${esc(c.ch)}</span> ${sylHTML(c.syl, c.tone)} ${ok ? '<b style="color:var(--good)">✓</b>' : '<b style="color:var(--bad)">✗</b>'}</span>`;
       saySyl(c.syl, c.tone, item.tokens[c.ti].h);
       setTimeout(() => { if (!app.contains(segp) || awaiting !== ci) return; hideTone(); goTo(qpos + 1); }, ok ? 750 : 1500);
+    }
+    function jumpTo(i) {
+      if (i === queue[qpos]) return;
+      const k = queue.indexOf(i);
+      if (k >= qpos) { goTo(k); return; }
+      const rest = queue.slice(qpos).filter((x) => x !== i);
+      results[i] = null;
+      queue = [i].concat(rest); qpos = 0; repDone = 0;
+      startCur();
     }
     function goTo(k) {
       repDone = 0;
@@ -1388,20 +1439,36 @@
       startCur();
     }
 
-    startCur();
-    setTimeout(() => {
+    // Size the writing grid so the phrase, the grid and its buttons fit on one screen
+    // (iPhone, iPad split view, landscape); scroll only when the buttons would be cut off.
+    function fitPad(scroll) {
       if (!app.contains(segp)) return;
+      const padEl = $('pad');
       const split = getComputedStyle(app.querySelector('.wv')).gridTemplateColumns.split(' ').length > 1;
-      if (split) return;
+      if (split || !$('result').hidden) { if (padEl.style.width) { padEl.style.width = ''; pad.resize(); } return; }
       const topH = app.querySelector('.top').getBoundingClientRect().height;
-      const last = !dict && set.reps !== 1 ? $('stkrow') : app.querySelector('.ptools');
-      const need = last.getBoundingClientRect().bottom + window.scrollY - innerHeight + 10;
-      const maxS = app.querySelector('.seghead').getBoundingClientRect().top + window.scrollY - topH - 10;
-      const target = Math.max(0, Math.min(need, maxS));
-      if (target > window.scrollY + 4) window.scrollTo({ top: target, behavior: 'smooth' });
-    }, 150);
+      const head = app.querySelector('.seghead');
+      const last = !$('tonepick').hidden ? $('tonepick') : $('ptools');
+      const cur = padEl.getBoundingClientRect().width;
+      const other = last.getBoundingClientRect().bottom - head.getBoundingClientRect().top - cur;
+      const w = Math.floor(Math.max(240, Math.min(padEl.parentElement.clientWidth, innerHeight - topH - 18 - other)));
+      if (Math.abs(w - cur) > 2) { padEl.style.width = w + 'px'; pad.resize(); }
+      if (scroll && last.getBoundingClientRect().bottom > innerHeight - 4) {
+        const target = head.getBoundingClientRect().top + window.scrollY - topH - 8;
+        window.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+      }
+    }
+    onSwipe(app.querySelector('.prompt'), (d) => {
+      if (awaiting != null || !$('result').hidden) return;
+      if (d > 0) goTo(qpos + 1);
+      else if (qpos > 0) { results[queue[qpos - 1]] = null; goTo(qpos - 1); }
+    });
+    const onFit = debounce(() => fitPad(false), 120);
+    window.addEventListener('resize', onFit);
+    startCur();
+    requestAnimationFrame(() => { fitReady = true; fitPad(true); });
     setView({
-      destroy() { pad.destroy(); },
+      destroy() { pad.destroy(); window.removeEventListener('resize', onFit); },
       act(a, el) {
         if (chipActs(a, el)) return;
         const c = chars[queue[qpos]];
@@ -1409,28 +1476,21 @@
         else if (a === 'sylplay') { if (c) saySyl(c.syl, c.tone, item.tokens[c.ti].h); }
         else if (a === 'dtone') answerTone(+el.dataset.v, el);
         else if (a === 'say') say(full);
-        else if (a === 'trtoggle') { set.showTr = !set.showTr; save(); el.classList.toggle('on', set.showTr); drawTr(); }
+        else if (a === 'trtoggle') { set.showTr = !set.showTr; save(); el.classList.toggle('on', set.showTr); drawTr(); fitPad(false); }
         else if (a === 'cprev') { if (qpos > 0) { results[queue[qpos - 1]] = null; goTo(qpos - 1); } else { repDone = 0; startCur(); } }
         else if (a === 'cnext') goTo(qpos + 1);
         else if (a === 'segprev') goSeg(-1);
         else if (a === 'segnext') goSeg(1);
         else if (a === 'reps') {
           const order = [1, 3, 5, 0]; set.reps = order[(order.indexOf(set.reps) + 1) % order.length]; save();
-          el.textContent = t('repsBtn', set.reps); progress();
+          progress(); toast(t('repsBtn', set.reps));
         }
         else if (a === 'hint') pad.hint();
         else if (a === 'reveal') showOrder();
         else if (a === 'restart') pad.restart();
         else if (a === 'retry') restartWith(chars.map((_, i) => i).filter((i) => !results[i] || results[i].grade < 2));
         else if (a === 'again') restartWith(chars.map((_, i) => i));
-        else if (a === 'jump') {
-          const i = +el.dataset.i;
-          if (i === queue[qpos]) return;
-          const rest = queue.slice(qpos).filter((x) => x !== i);
-          results[i] = null;
-          queue = [i].concat(rest); qpos = 0; repDone = 0;
-          startCur();
-        }
+        else if (a === 'jump') jumpTo(+el.dataset.i);
       },
       key(e) {
         if (awaiting != null) {

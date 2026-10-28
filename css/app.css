@@ -225,7 +225,6 @@ svg.i { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-widt
 .sv-bg { fill: #38383f; }
 .sv-fg { fill: #f6f6f8; opacity: 0; }
 .sv-fg.on { opacity: 1; }
-.sv-fg.cur { fill: var(--acc); }
 .sv-an { fill: none; stroke: #f6f6f8; stroke-width: 150; stroke-linecap: round; stroke-linejoin: round; visibility: hidden; }
 .svbar { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
 .svbar .pill {
@@ -396,8 +395,12 @@ button.slot:active { background: var(--card2); }
 .rbtns-top { display: flex; gap: 10px; }
 /* stroke-order sheet */
 .so-h { align-items: center; }
-.so-py { font-size: 28px; font-weight: 500; }
-.so-py .hz { font-size: 34px; }
+.so-py { font-size: 28px; font-weight: 500; display: flex; align-items: baseline; gap: 12px; }
+.so-py .hz { font-size: 30px; color: var(--mute); }
+.so-nav { background: #3a3a40; }
+.so-nav.fwd svg.i { transform: scaleX(-1); }
+.so-nav:disabled { opacity: .35; }
+.so-stage { touch-action: pan-y; }
 .so-n { text-align: center; font-weight: 600; font-size: 17px; margin: 0 0 10px; font-variant-numeric: tabular-nums; }
 .so .sv { width: min(100%, 420px, calc(100svh - 300px)); min-width: 220px; }
 .so .svbar { margin-top: 16px; }
@@ -462,3 +465,17 @@ button.slot:active { background: var(--card2); }
   .tcell .tc { font-size: 30px; }
   .tkeys { gap: 8px; }
 }
+
+/* touch: no double-tap zoom on controls, no accidental text selection / callouts while tapping */
+button, a, .chip, .slot, .tkey { touch-action: manipulation; }
+.top, .prompt .seghead, .abar, .padwrap, .sheet .so-h, .sheet .so-n, .svbar, .svcount, .ctabs, .tkeys, .rbtns, .chips {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+
+/* repeat counter on the writing grid (trace) */
+.repbadge {
+  position: absolute; top: 8px; right: 8px; z-index: 3; height: 30px; padding: 0 10px; border-radius: 15px;
+  background: rgba(40, 40, 46, .92); border: 1px solid var(--line2); color: #dedee4; font-size: 13px;
+  display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums;
+}
+.repbadge svg.i { width: 14px; height: 14px; color: var(--acc); }
