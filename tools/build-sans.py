@@ -75,8 +75,15 @@ from skimage.morphology import skeletonize
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CACHE = ROOT / 'tools' / 'cache'
 SRC = CACHE / 'mmah-strokes.json'
-VF_URL = 'https://github.com/google/fonts/raw/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf'
-VF = CACHE / 'NotoSansSC-VF.ttf'
+# Source font (variable, overlapping per-stroke contours). SANS_FONT=noto|harmony.
+# HarmonyOS Sans SC is closest to iOS PingFang (e.g. 尔 in 你: the 撇 stops at the bar).
+FONTS = {
+    'noto': ('https://github.com/google/fonts/raw/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf', 'NotoSansSC-VF.ttf', 'NotoSansSC'),
+    'harmony': ('https://raw.githubusercontent.com/kanami09/HarmonyOS-Sans-Font/main/files/HarmonyOS_Sans_SC.ttf', 'HarmonyOS_Sans_SC.ttf', 'HarmonyOSSansSC'),
+}
+FONT_KEY = os.environ.get('SANS_FONT', 'harmony')
+VF_URL, _vf_file, FONT_TAG = FONTS[FONT_KEY]
+VF = CACHE / _vf_file
 WEIGHT = 400
 K = 2                      # raster pixels per unit
 N = 1024 * K
@@ -173,7 +180,7 @@ def load_font(chars):
     CACHE.mkdir(parents=True, exist_ok=True)
     if not VF.exists() or VF.stat().st_size < 1_000_000:
         urllib.request.urlretrieve(VF_URL, VF)
-    inst = CACHE / f'NotoSansSC-{WEIGHT}.ttf'
+    inst = CACHE / f'{FONT_TAG}-{WEIGHT}.ttf'
     if inst.exists():
         f = TTFont(inst)
         if all(ord(c) in f.getBestCmap() for c in chars):
@@ -194,6 +201,37 @@ def load_font(chars):
 def signed_area(poly):
     a = np.asarray(poly, float)
     return 0.5 * float(np.sum(a[:, 0] * np.roll(a[:, 1], -1) - np.roll(a[:, 0], -1) * a[:, 1]))
+
+
+def winding(pt, poly):
+    """winding number of point pt around the closed polygon poly"""
+    x, y = pt
+    a = np.asarray(poly, float)
+    b = np.roll(a, -1, axis=0)
+    up = (a[:, 1] <= y) & (b[:, 1] > y)
+    dn = (a[:, 1] > y) & (b[:, 1] <= y)
+    cross = (b[:, 0] - a[:, 0]) * (y - a[:, 1]) - (x - a[:, 0]) * (b[:, 1] - a[:, 1])
+    return int(np.sum(up & (cross > 0)) - np.sum(dn & (cross < 0)))
+
+
+def ring_nonzero(poly):
+    """closed contour -> shapely geometry under the nonzero fill rule (the font's rule). HarmonyOS has
+    self-intersecting contours (the corner of 阝, the crossing in 母); shapely / cv2 would leave the overlap empty.
+    Returns (geometry, list of face polygons that the even-odd fill misses)"""
+    from shapely.geometry import LinearRing
+    from shapely.ops import polygonize
+    pg = Polygon(poly)
+    if pg.is_valid:
+        return pg, []
+    faces = [f for f in polygonize(unary_union(LinearRing(poly))) if f.area > 0.5]
+    keep, extra = [], []
+    for f in faces:
+        wn = winding(f.representative_point().coords[0], poly)
+        if wn != 0:
+            keep.append(f)
+            if wn % 2 == 0:
+                extra.append(f)
+    return (unary_union(keep).buffer(0) if keep else pg.buffer(0)), extra
 
 
 def glyph_pieces(font, ch):
@@ -238,10 +276,15 @@ def glyph_pieces(font, ch):
         if c['parent'] is not None and cons[c['parent']]['parent'] is None:
             continue                                  # a hole: drawn with its outer contour
         holes = [h for h in cons if h['parent'] == i]
+        geom, extra = ring_nonzero(c['unit'])
         m = fill([c['px']])
+        for f in extra:
+            m |= fill([to_px(np.array(f.exterior.coords))])
         if holes:
             m &= ~fill([h['px'] for h in holes])
-        pieces.append({'svg': ' '.join([c['d']] + [h['d'] for h in holes]), 'mask': m, 'outer': c['unit'], 'holes': [h['unit'] for h in holes]})
+            geom = geom.difference(unary_union([Polygon(h['unit']).buffer(0) for h in holes]))
+        pieces.append({'svg': ' '.join([c['d']] + [h['d'] for h in holes]), 'mask': m, 'outer': c['unit'],
+                       'holes': [h['unit'] for h in holes], 'geom': geom})
     return pieces
 
 
@@ -618,6 +661,27 @@ def skel_graph(pm, edt):
             cs = np.dot(d1, d2) / (np.linalg.norm(d1) * np.linalg.norm(d2) + 1e-9)
             if cs < math.cos(math.radians(40)):
                 cuts.append(b)
+        # a rounded corner (the skeleton bends over several RDP vertices, each turning < 40 deg, e.g. the
+        # diagonal -> vertical knee of 子): measure the turn over a window of ~0.9 stroke widths each side
+        # and cut at the sharpest point of every bend that turns > 33 deg in total
+        if len(ch) > 6:
+            cum = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(ch, axis=0), axis=1))])
+            Lw = 0.9 * w
+            turn = np.zeros(len(ch))
+            for i in range(len(ch)):
+                if cum[i] < Lw or cum[-1] - cum[i] < Lw:
+                    continue
+                a = int(np.searchsorted(cum, cum[i] - Lw))
+                c = min(int(np.searchsorted(cum, cum[i] + Lw)), len(ch) - 1)
+                d1, d2 = ch[i] - ch[a], ch[c] - ch[i]
+                turn[i] = np.dot(d1, d2) / (np.linalg.norm(d1) * np.linalg.norm(d2) + 1e-9)
+            cand = np.where((turn != 0) & (turn < math.cos(math.radians(33))))[0]
+            groups = np.split(cand, np.where(np.diff(cand) > 1)[0] + 1) if len(cand) else []
+            for g in groups:
+                b = int(g[np.argmin(turn[g])])
+                if all(abs(cum[b] - cum[x]) > 0.8 * w for x in cuts) and cum[b] > 0.8 * w and cum[-1] - cum[b] > 0.8 * w:
+                    cuts.append(b)
+            cuts.sort()
         last, lu = 0, u
         for b in cuts:
             nodes.append(ch[b].copy())
@@ -705,16 +769,44 @@ def path_candidates(nodes, E, ref, w, maxe=6, top=8):
 SKIPC = 400.0
 
 
-def partition_piece(pm, refs, can_skip):
+def split_at(nodes, ndeg, E, pt, w):
+    """insert a graph node on the edge passing closest to pt (an explicit override line end lying inside an edge,
+    e.g. a rounded knee the corner detector missed)"""
+    best = None
+    for ei, (a, b, ch) in enumerate(E):
+        d = np.linalg.norm(ch - pt, axis=1)
+        i = int(np.argmin(d))
+        if best is None or d[i] < best[0]:
+            best = (d[i], ei, i)
+    if best is None or best[0] > 0.7 * w:
+        return nodes, ndeg, E
+    _, ei, i = best
+    a, b, ch = E[ei]
+    cum = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(ch, axis=0), axis=1))])
+    if cum[i] < 0.5 * w or cum[-1] - cum[i] < 0.5 * w:
+        return nodes, ndeg, E
+    n = len(nodes)
+    nodes = np.vstack([nodes, ch[i][None]])
+    ndeg = np.append(ndeg, 2)
+    E = E[:ei] + [(a, n, ch[:i + 1]), (n, b, ch[i:])] + E[ei + 1:]
+    return nodes, ndeg, E
+
+
+def partition_piece(pm, refs, can_skip, exact=None):
     """split a multi-stroke piece (crop mask) into strokes along skeleton paths.
     refs: reference medians (crop px) in writing order. Returns per stroke (region mask, core mask, path poly, free ends)
-    or None for a stroke that takes no part of this piece."""
+    or None for a stroke that takes no part of this piece. exact[s]: refs[s] is an explicit override line; its ends
+    become graph nodes."""
     closed = ndimage.binary_closing(pm, iterations=2) | pm
     edt = ndimage.distance_transform_edt(closed)
     nodes, ndeg, E, w = skel_graph(closed, edt)
     k = len(refs)
     if not E:
         return None
+    for s in range(k):
+        if exact and exact[s]:
+            for pt in (refs[s][0], refs[s][-1]):
+                nodes, ndeg, E = split_at(nodes, ndeg, E, np.asarray(pt, float), w)
     # a stroke that also lives in other pieces: compare only the part of its reference lying on this piece
     dout = ndimage.distance_transform_edt(~closed)
     skipc = [SKIPC] * k
@@ -749,30 +841,72 @@ def partition_piece(pm, refs, can_skip):
     m = max(2, int(math.floor(30000 ** (1 / k))))
     cands = [o[:m] if len(o) <= m or o[-1][2] is not None else o[:m - 1] + [o[-1]] for o in cands]
     longe = [ei for ei in range(len(E)) if elen[ei] > 0.5 * w]
+    # short edges of a 3-cycle (a thick corner's skeleton loop)
+    nbs = [set() for _ in nodes]
+    for a_, b_, _ in E:
+        if a_ != b_:
+            nbs[a_].add(b_)
+            nbs[b_].add(a_)
+    tri = {ei for ei, (a_, b_, _) in enumerate(E) if a_ != b_ and elen[ei] < 2.2 * w and nbs[a_] & nbs[b_]}
     import itertools
     bestc, bestsel = None, None
     for sel in itertools.product(*[range(len(o)) for o in cands]):
         tot = 0.0
         use = np.zeros(len(E), int)
+        unode = set()
         for s, i in enumerate(sel):
-            c, es, _, _ = cands[s][i]
+            c, es, ns_, _ = cands[s][i]
             tot += c
             for e in es:
                 use[e] += 1
+            if ns_:
+                unode.update(ns_)
         for ei in longe:
             if use[ei] == 0:
-                tot += 60 + 1.0 * elen[ei] / K
+                # a short chord between two nodes the strokes pass anyway (the skeleton of a thick corner forms
+                # a little loop, e.g. the top-left corner of 阝) needs no owner of its own
+                if ei in tri and E[ei][0] in unode and E[ei][1] in unode:
+                    tot += 15
+                else:
+                    tot += 60 + 1.0 * elen[ei] / K
         for ei in np.where(use > 1)[0]:
             tot += (use[ei] - 1) * (60 + 1.0 * elen[ei] / K)
         if bestc is None or tot < bestc:
             bestc, bestsel = tot, sel
+    # V turn (辶 of 这): stroke s ends at a junction j, stroke s+1 starts at a free tip t right next to it and comes
+    # back through j. If s's reference really ends at the tip, s also owns the tip edge (both strokes draw it,
+    # like the brush data)
+    picks = [list(cands[s][i]) for s, i in enumerate(bestsel)]
+    for s in range(k - 1):
+        a_, b_ = picks[s], picks[s + 1]
+        if a_[2] is None or b_[2] is None or len(b_[2]) < 2:
+            continue
+        t, j = b_[2][0], a_[2][-1]
+        if ndeg[t] != 1 or j not in b_[2][1:4] or any(ndeg[n] != 2 for n in b_[2][1:b_[2].index(j)]):
+            continue
+        r_end = refs[s][-1]
+        if np.linalg.norm(r_end - nodes[t]) >= np.linalg.norm(r_end - nodes[j]):
+            continue
+        run = b_[2][:b_[2].index(j) + 1][::-1]          # j ... t
+        ok = True
+        for u, v in zip(run[:-1], run[1:]):
+            ei = next((e for e in range(len(E)) if {E[e][0], E[e][1]} == {u, v}), None)
+            if ei is None:
+                ok = False
+                break
+            chn = E[ei][2] if E[ei][0] == u else E[ei][2][::-1]
+            a_[3] = np.vstack([a_[3], chn[1:]])
+            a_[2] = a_[2] + [v]
+            a_[1] = set(a_[1]) | {ei}
+        if not ok:
+            continue
     # regions: discs along each path (radius ~1.15 x local half-width), leftovers to the nearest path
     H, W = pm.shape
     lab = np.full(pm.shape, -1, int)
     discs = []
     res = []
     for s, i in enumerate(bestsel):
-        c, es, ns, poly = cands[s][i]
+        c, es, ns, poly = picks[s]
         if poly is None:
             discs.append(None)
             res.append(None)
@@ -806,9 +940,34 @@ def partition_piece(pm, refs, can_skip):
     for s in range(k):
         if res[s] is not None:
             res[s][0] = discs[s] | (left & (near == s))
-    note = ' '.join(f'{s + 1}:' + ('-' if bestsel is None or cands[s][i][2] is None else '>'.join(str(n) for n in cands[s][i][2]))
-                    for s, i in enumerate(bestsel))
+    if os.environ.get('HZ_GRAPH'):
+        _graph_dbg(pm, nodes, E, refs, cands, bestsel, w)
+    note = ' '.join(f'{s + 1}:' + ('-' if picks[s][2] is None else '>'.join(str(n) for n in picks[s][2])) for s in range(k))
     return res, note
+
+
+_GTAG = ''
+
+
+def _graph_dbg(pm, nodes, E, refs, cands, bestsel, w):
+    """debug: skeleton graph with node ids, the refs and chosen paths -> /tmp/hzwk/g-<tag>.png; candidates printed"""
+    t = np.full(pm.shape + (3,), 30, np.uint8)
+    t[pm] = (90, 90, 90)
+    for a, b, ch in E:
+        cv2.polylines(t, [np.round(ch).astype(np.int32)], False, (200, 200, 200), 2)
+    cols = [(60, 60, 255), (60, 200, 60), (255, 120, 40), (40, 220, 255), (255, 60, 255), (255, 255, 60)]
+    for s, r in enumerate(refs):
+        cv2.polylines(t, [np.round(r).astype(np.int32)], False, cols[s % 6], 3)
+        cv2.circle(t, tuple(np.round(r[0]).astype(int)), 8, cols[s % 6], -1)
+    for i, (x, y) in enumerate(nodes):
+        cv2.putText(t, str(i), (int(x) + 4, int(y) - 4), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+    cv2.imwrite(f'/tmp/hzwk/g-{_GTAG}.png', t)
+    print(_GTAG, 'w', round(w / K), 'nodes', [tuple(int(v) for v in px_to_unit(x + _GOFF[0], y + _GOFF[1])) for x, y in nodes])
+    for s, o in enumerate(cands):
+        print('  ref', s, 'pick', bestsel[s] if bestsel else None, ' | '.join(f"{c:.0f}:{'>'.join(map(str, ns)) if ns else '-'}" for c, es, ns, poly in o[:6]))
+
+
+_GOFF = (0, 0)
 
 
 def set_ends(path, reg, trims, w):
@@ -1093,19 +1252,22 @@ def build_char(font, ch, d, ov, dbg=None):
         pm = pmask[p][y0:y1, x0:x1]
         pov = ov.get('pieces', {}).get(str(p))
         refs = []
+        exact = [isinstance(pov, dict) and str(s + 1) in pov['lines'] for s in o]
         for s in o:
             if isinstance(pov, dict) and str(s + 1) in pov['lines']:
                 refs.append(np.array([unit_to_px(x, y) for x, y in pov['lines'][str(s + 1)]], float) - (x0, y0))
             else:
                 refs.append(meds[s] - (x0, y0))
         can_skip = [any(s in allowed[q] for q in range(npc) if q != p) for s in o]
-        r = partition_piece(pm, refs, can_skip)
+        global _GTAG, _GOFF
+        _GTAG, _GOFF = f'{ord(ch):x}-p{p}', (x0, y0)
+        r = partition_piece(pm, refs, can_skip, exact)
         if r is None:
             note.append(f'NOGRAPH p{p}')
             continue
         res_p, pnote = r
         cuts.append('+'.join(str(s + 1) for s in o) + f'@p{p}[{pnote}]')
-        pg = Polygon(pieces[p]['outer'], pieces[p]['holes']).buffer(0)
+        pg = pieces[p]['geom']
         for kk, s in enumerate(o):
             if res_p[kk] is None:
                 note.append(f'SKIP {s + 1}@p{p}')
@@ -1330,10 +1492,7 @@ def square_joints(res, pieces):
     from shapely.geometry import LineString, Point
     pgeo = []
     for pc in pieces:
-        g = Polygon(pc['outer']).buffer(0)
-        if pc['holes']:
-            g = g.difference(unary_union([Polygon(h).buffer(0) for h in pc['holes']]))
-        pgeo.append(g)
+        pgeo.append(pc['geom'])
     old = [stroke_geom(x) for x in res['strokes']]
     new = list(old)
     touched = set()
@@ -1423,7 +1582,11 @@ def drop_detached(res):
             # a detached copy of another stroke's tip: hand it to the stroke it overlaps most
             best = max(((gj.intersection(g).area, j) for j, gj in enumerate(geo) if gj is not None), default=(0, -1))
             if best[1] < 0 or best[0] < 0.5 * g.area:
-                continue
+                # a sliver cut off another stroke's edge: give it to the stroke it touches
+                near = min(((gj.distance(g), j) for j, gj in enumerate(geo) if gj is not None), default=(1e9, -1))
+                if near[1] < 0 or near[0] > 4 or g.area > 1500:
+                    continue
+                best = (0, near[1])
             res['strokes'][best[1]] = res['strokes'][best[1]] + ' ' + ' '.join(subs[k].strip() for k in grp)
             drop.update(grp)
         if drop:
@@ -1463,7 +1626,7 @@ def main():
     _DBG = '--debug' in sys.argv
     preview = ''.join(args)
     _SRC = src = json.loads(SRC.read_text(encoding='utf-8'))
-    ovf = ROOT / 'tools' / 'sans-overrides.json'
+    ovf = ROOT / 'tools' / ('sans-overrides.json' if FONT_KEY == 'noto' else f'sans-overrides-{FONT_KEY}.json')
     _OV = json.loads(ovf.read_text(encoding='utf-8')) if ovf.exists() else {}
     chars = [c for c in src if not preview or c in preview]
     load_font(list(src))                    # make sure the instanced font exists before forking
@@ -1491,14 +1654,22 @@ def main():
     if not preview:
         target = ROOT / 'data' / 'strokes.js'
         font = load_font(list(src))
+        sys.path.insert(0, str(ROOT / 'tools'))
+        import feet
+        feet_log = {}
         pieces_by_char = {c: glyph_pieces(font, c) for c in out if 'BRUSH' not in notes.get(c, '')}
         for c in out:
             if pieces_by_char.get(c):
                 square_joints(out[c], pieces_by_char[c])
             drop_detached(out[c])
             add_margin(out[c])
+            flog = []
+            feet.match_feet(out[c], flog)       # 横折 of a closed box reaches down to the left 竖's foot
+            if flog:
+                feet_log[c] = flog
         target.write_text('window.HZ_STROKES = ' + json.dumps({c: out[c] for c in src}, ensure_ascii=False, separators=(',', ':')) + ';\n', encoding='utf-8')
         print('wrote', target, target.stat().st_size, 'bytes')
+        print('feet:', ' '.join(f'{c}{v}' for c, v in feet_log.items()))
     prefix = 'verify-preview' if preview else 'verify'
     for k in CACHE.glob(f'{prefix}-*.png'):
         k.unlink()
